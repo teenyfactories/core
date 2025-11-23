@@ -1,0 +1,19 @@
+# TeenyFactories Core Module Requirements
+# Shared dependencies for all factories
+
+# Core Framework
+python-dotenv>=1.0.0          # Environment variable management
+redis>=5.0.0                  # Redis client for event coordination
+schedule>=1.2.0               # Job scheduling
+
+# LangChain and LLM Integrations
+langchain>=0.2.0,<0.3.0           # Core LangChain framework
+langchain-core>=0.2.0,<0.3.0      # LangChain core components
+langchain-community>=0.2.0,<0.3.0 # Community integrations (Ollama, etc)
+langchain-openai>=0.1.0,<0.2.0    # OpenAI integration
+langchain-anthropic>=0.1.0,<0.2.0 # Anthropic integration
+langchain-google-genai>=1.0.0,<2.0.0 # Google Gemini integration
+openai>=1.30.0                     # OpenAI Python client
+
+# Data Validation
+pydantic>=2.0.0            # Data validation for LLM responses
