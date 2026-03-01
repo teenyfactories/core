@@ -3,7 +3,7 @@
 
 # Core Framework
 python-dotenv>=1.0.0          # Environment variable management
-redis>=5.0.0                  # Redis client for event coordination
+psycopg2-binary>=2.9.0        # PostgreSQL client for LISTEN/NOTIFY and job queue
 schedule>=1.2.0               # Job scheduling
 
 # LangChain and LLM Integrations

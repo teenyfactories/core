@@ -110,24 +110,16 @@ _listener_running: bool = False
 
 
 def _get_provider() -> MessageQueueProvider:
-    """Get or create the message queue provider instance"""
+    """Get or create the message queue provider instance (PostgreSQL only)"""
     global _provider_instance
 
     if _provider_instance is None:
-        provider_name = os.getenv('MESSAGE_QUEUE_PROVIDER', 'redis')
-
-        if provider_name == 'redis':
-            from .providers.redis import RedisProvider
-            _provider_instance = RedisProvider()
-        elif provider_name == 'postgres':
-            from .providers.postgres import PostgresProvider
-            _provider_instance = PostgresProvider()
-        else:
-            raise ValueError(f"Unsupported message queue provider: {provider_name}")
+        from .providers.postgres import PostgresProvider
+        _provider_instance = PostgresProvider()
 
         # Connect to the provider
         _provider_instance.connect()
-        log_info(f"🔌 Connected to message queue provider: {provider_name}")
+        log_info("🔌 Connected to PostgreSQL message queue")
 
     return _provider_instance
 

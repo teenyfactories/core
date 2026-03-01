@@ -228,3 +228,336 @@ class PostgresProvider(MessageQueueProvider):
             """)
         except Exception as e:
             log_error(f"❌ Failed to cleanup expired keys: {e}")
+
+    # =========================================================================
+    # Job Queue Methods (claim-based queue for state pub/sub)
+    # =========================================================================
+
+    def publish_job(self, factory_name: str, state_name: str, payload: dict, priority: int = 0):
+        """
+        Publish a job to the queue (insert into jobs table + NOTIFY).
+
+        This is the claim-based equivalent of send_message for states.
+        """
+        try:
+            if not self.connection:
+                self.connect()
+
+            # Insert job into jobs table
+            self.cursor.execute("""
+                INSERT INTO jobs (factory_name, state_name, payload, priority)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
+            """, (factory_name, state_name, json.dumps(payload), priority))
+
+            job_id = self.cursor.fetchone()[0]
+
+            # Notify listeners that a job is available
+            channel = f"job_available_{state_name}".replace('-', '_').replace(':', '_')
+            self.cursor.execute(f"NOTIFY job_available, %s", (
+                json.dumps({'job_id': job_id, 'factory_name': factory_name, 'state_name': state_name}),
+            ))
+
+            return job_id
+
+        except Exception as e:
+            log_error(f"❌ Failed to publish job: {e}")
+            raise
+
+    def claim_job(self, topics: List[str], worker_id: str, timeout_seconds: int = 300) -> Optional[dict]:
+        """
+        Atomically claim a job from the queue using FOR UPDATE SKIP LOCKED.
+
+        Args:
+            topics: List of state names to claim jobs for
+            worker_id: Unique identifier for this worker/container
+            timeout_seconds: How long before the job is considered stale
+
+        Returns:
+            Job dict with id, state_name, payload, etc. or None if no jobs available
+        """
+        try:
+            if not self.connection:
+                self.connect()
+
+            # Build topic filter
+            topic_placeholders = ', '.join(['%s'] * len(topics))
+
+            # Atomically claim a job using FOR UPDATE SKIP LOCKED
+            self.cursor.execute(f"""
+                UPDATE jobs
+                SET claimed_at = NOW(),
+                    claimed_by = %s
+                WHERE id = (
+                    SELECT id FROM jobs
+                    WHERE state_name IN ({topic_placeholders})
+                    AND claimed_at IS NULL
+                    AND completed_at IS NULL
+                    AND failed_at IS NULL
+                    ORDER BY priority DESC, created_at ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                )
+                RETURNING id, factory_name, state_name, payload, priority, created_at, retry_count
+            """, (worker_id, *topics))
+
+            row = self.cursor.fetchone()
+
+            if row:
+                return {
+                    'id': row[0],
+                    'factory_name': row[1],
+                    'state_name': row[2],
+                    'payload': json.loads(row[3]) if isinstance(row[3], str) else row[3],
+                    'priority': row[4],
+                    'created_at': row[5].isoformat() if row[5] else None,
+                    'retry_count': row[6],
+                }
+
+            return None
+
+        except Exception as e:
+            log_error(f"❌ Failed to claim job: {e}")
+            return None
+
+    def complete_job(self, job_id: int):
+        """Mark a job as completed"""
+        try:
+            if not self.connection:
+                self.connect()
+
+            self.cursor.execute("""
+                UPDATE jobs
+                SET completed_at = NOW()
+                WHERE id = %s
+            """, (job_id,))
+
+        except Exception as e:
+            log_error(f"❌ Failed to complete job {job_id}: {e}")
+            raise
+
+    def fail_job(self, job_id: int, error_message: str):
+        """
+        Mark a job as failed. If under max_retries, return it to the queue.
+        """
+        try:
+            if not self.connection:
+                self.connect()
+
+            # Get current retry count and max retries
+            self.cursor.execute("""
+                SELECT retry_count, max_retries FROM jobs WHERE id = %s
+            """, (job_id,))
+
+            row = self.cursor.fetchone()
+            if not row:
+                return
+
+            retry_count, max_retries = row
+
+            if retry_count < max_retries:
+                # Return to queue with incremented retry count
+                self.cursor.execute("""
+                    UPDATE jobs
+                    SET claimed_at = NULL,
+                        claimed_by = NULL,
+                        retry_count = retry_count + 1,
+                        error_message = %s
+                    WHERE id = %s
+                """, (error_message, job_id))
+            else:
+                # Permanently fail the job
+                self.cursor.execute("""
+                    UPDATE jobs
+                    SET failed_at = NOW(),
+                        error_message = %s
+                    WHERE id = %s
+                """, (error_message, job_id))
+
+        except Exception as e:
+            log_error(f"❌ Failed to fail job {job_id}: {e}")
+            raise
+
+    def recover_stale_jobs(self, timeout_seconds: int = 300):
+        """
+        Return timed-out jobs to the queue for reprocessing.
+        Called periodically to handle crashed workers.
+        """
+        try:
+            if not self.connection:
+                self.connect()
+
+            self.cursor.execute("""
+                UPDATE jobs
+                SET claimed_at = NULL,
+                    claimed_by = NULL,
+                    retry_count = retry_count + 1
+                WHERE claimed_at IS NOT NULL
+                AND completed_at IS NULL
+                AND failed_at IS NULL
+                AND claimed_at < NOW() - INTERVAL '%s seconds'
+                AND retry_count < max_retries
+                RETURNING id
+            """, (timeout_seconds,))
+
+            recovered = self.cursor.fetchall()
+            if recovered:
+                log_info(f"♻️ Recovered {len(recovered)} stale jobs")
+
+            return len(recovered)
+
+        except Exception as e:
+            log_error(f"❌ Failed to recover stale jobs: {e}")
+            return 0
+
+    def get_queue_stats(self, factory_name: str = None) -> dict:
+        """Get statistics about the job queue"""
+        try:
+            if not self.connection:
+                self.connect()
+
+            factory_filter = "WHERE factory_name = %s" if factory_name else ""
+            params = (factory_name,) if factory_name else ()
+
+            self.cursor.execute(f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE claimed_at IS NULL AND completed_at IS NULL AND failed_at IS NULL) as pending,
+                    COUNT(*) FILTER (WHERE claimed_at IS NOT NULL AND completed_at IS NULL AND failed_at IS NULL) as processing,
+                    COUNT(*) FILTER (WHERE completed_at IS NOT NULL) as completed,
+                    COUNT(*) FILTER (WHERE failed_at IS NOT NULL) as failed
+                FROM jobs
+                {factory_filter}
+            """, params)
+
+            row = self.cursor.fetchone()
+            return {
+                'pending': row[0] or 0,
+                'processing': row[1] or 0,
+                'completed': row[2] or 0,
+                'failed': row[3] or 0,
+            }
+
+        except Exception as e:
+            log_error(f"❌ Failed to get queue stats: {e}")
+            return {'pending': 0, 'processing': 0, 'completed': 0, 'failed': 0}
+
+    # =========================================================================
+    # AND Conditional State Methods
+    # =========================================================================
+
+    def has_recent_job(self, factory_name: str, state_name: str, window_seconds: int = 300) -> bool:
+        """
+        Check if there's a recent completed job for a given state.
+
+        Used for AND condition evaluation - an AND condition is satisfied
+        when ALL required input states have recent completed jobs.
+
+        Args:
+            factory_name: Factory to check
+            state_name: State name to check
+            window_seconds: Time window in seconds (default 5 minutes)
+
+        Returns:
+            True if there's a completed job within the time window
+        """
+        try:
+            if not self.connection:
+                self.connect()
+
+            self.cursor.execute("""
+                SELECT EXISTS(
+                    SELECT 1 FROM jobs
+                    WHERE factory_name = %s
+                    AND state_name = %s
+                    AND completed_at IS NOT NULL
+                    AND completed_at > NOW() - INTERVAL '%s seconds'
+                )
+            """, (factory_name, state_name, window_seconds))
+
+            row = self.cursor.fetchone()
+            return row[0] if row else False
+
+        except Exception as e:
+            log_error(f"❌ Failed to check recent job for {state_name}: {e}")
+            return False
+
+    def check_and_conditions(
+        self,
+        factory_name: str,
+        required_states: List[str],
+        window_seconds: int = 300
+    ) -> bool:
+        """
+        Check if AND conditions are satisfied for an action.
+
+        An AND condition is satisfied when ALL required input states
+        have recent completed jobs within the time window.
+
+        Args:
+            factory_name: Factory name
+            required_states: List of state names that must all have recent jobs
+            window_seconds: Time window in seconds (default 5 minutes)
+
+        Returns:
+            True if all required states have recent completed jobs
+        """
+        if not required_states:
+            return True  # No conditions = always satisfied
+
+        try:
+            if not self.connection:
+                self.connect()
+
+            # Check all states in a single query for efficiency
+            placeholders = ', '.join(['%s'] * len(required_states))
+            self.cursor.execute(f"""
+                SELECT state_name FROM jobs
+                WHERE factory_name = %s
+                AND state_name IN ({placeholders})
+                AND completed_at IS NOT NULL
+                AND completed_at > NOW() - INTERVAL '%s seconds'
+                GROUP BY state_name
+            """, (factory_name, *required_states, window_seconds))
+
+            found_states = {row[0] for row in self.cursor.fetchall()}
+            required_set = set(required_states)
+
+            return found_states == required_set
+
+        except Exception as e:
+            log_error(f"❌ Failed to check AND conditions: {e}")
+            return False
+
+    def wait_for_and_conditions(
+        self,
+        factory_name: str,
+        required_states: List[str],
+        window_seconds: int = 300,
+        timeout_seconds: int = 600,
+        poll_interval: float = 1.0
+    ) -> bool:
+        """
+        Wait for AND conditions to be satisfied.
+
+        Polls the database until all required states have recent completed jobs.
+
+        Args:
+            factory_name: Factory name
+            required_states: List of state names that must all have recent jobs
+            window_seconds: Time window for job freshness
+            timeout_seconds: Maximum time to wait
+            poll_interval: Time between checks in seconds
+
+        Returns:
+            True if conditions were satisfied, False if timeout
+        """
+        import time
+
+        start_time = time.time()
+
+        while time.time() - start_time < timeout_seconds:
+            if self.check_and_conditions(factory_name, required_states, window_seconds):
+                return True
+            time.sleep(poll_interval)
+
+        return False

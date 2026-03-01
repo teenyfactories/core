@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """
-TeenyFactories - Multi-provider LLM and Message Queue abstraction
+TeenyFactories - Multi-provider LLM and PostgreSQL Message Queue
 
 A Python package for building distributed agent systems with:
 - Multi-provider LLM integration (OpenAI, Anthropic, Google, Ollama, Azure Bedrock)
-- Pluggable message queue backends (Redis, PostgreSQL)
+- PostgreSQL-based message queue (LISTEN/NOTIFY) and job queue
 - Standardized logging and utilities
 
 Usage:
@@ -24,7 +24,7 @@ Usage:
 from .__version__ import __version__
 
 # Logging
-from .logging import log, log_debug, log_info, log_warn, log_error
+from .logging import log, log_debug, log_info, log_warn, log_error, log_persona
 
 # Utilities
 from .utils import get_aest_now, get_timestamp, generate_unique_id, AEST_TIMEZONE
@@ -45,13 +45,18 @@ from .message_queue import (
     release_processing_lock,
 )
 
+# Timer
+from .timer import Timer, create_timer, run_timer_agent
+
 # Configuration
 from .config import (
     PROJECT_NAME,
     FACTORY_PREFIX,
-    REDIS_HOST,
-    REDIS_PORT,
-    REDIS_DB,
+    POSTGRES_HOST,
+    POSTGRES_PORT,
+    POSTGRES_DB,
+    POSTGRES_USER,
+    POSTGRES_PASSWORD,
 )
 
 __all__ = [
@@ -64,6 +69,7 @@ __all__ = [
     'log_info',
     'log_warn',
     'log_error',
+    'log_persona',
 
     # Utilities
     'get_aest_now',
@@ -87,10 +93,17 @@ __all__ = [
     'acquire_processing_lock',
     'release_processing_lock',
 
+    # Timer
+    'Timer',
+    'create_timer',
+    'run_timer_agent',
+
     # Configuration
     'PROJECT_NAME',
     'FACTORY_PREFIX',
-    'REDIS_HOST',
-    'REDIS_PORT',
-    'REDIS_DB',
+    'POSTGRES_HOST',
+    'POSTGRES_PORT',
+    'POSTGRES_DB',
+    'POSTGRES_USER',
+    'POSTGRES_PASSWORD',
 ]

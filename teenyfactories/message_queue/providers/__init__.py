@@ -1,5 +1,5 @@
 """Message queue provider implementations"""
 
-from .redis import RedisProvider
+from .postgres import PostgresProvider
 
-__all__ = ['RedisProvider']
+__all__ = ['PostgresProvider']
