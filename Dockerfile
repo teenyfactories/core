@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir "teenyfactories[all]"
+RUN pip install --no-cache-dir --pre "teenyfactories[all]"
 
 WORKDIR /app
 
