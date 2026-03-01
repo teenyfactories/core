@@ -7,6 +7,13 @@ DOCKERHUB_IMAGE="teenyfactories/agent:${TAG}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+echo "Building and publishing pip package..."
+cd "${SCRIPT_DIR}"
+pip install build
+python -m build
+twine upload dist/*
+
+echo ""
 echo "Building teenyfactories/agent:${TAG}..."
 docker build -t "${GHCR_IMAGE}" "${SCRIPT_DIR}"
 # docker build -t "${DOCKERHUB_IMAGE}" "${SCRIPT_DIR}"
@@ -21,5 +28,6 @@ docker push "${GHCR_IMAGE}"
 
 echo ""
 echo "Done. Pushed:"
+echo "  PyPI: teenyfactories"
 echo "  ${GHCR_IMAGE}"
 # echo "  ${DOCKERHUB_IMAGE}"
