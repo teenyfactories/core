@@ -10,7 +10,7 @@ from typing import Type, TypeVar, Optional
 # Pydantic Models for LLM Response Validation (lazy import)
 try:
     from pydantic import BaseModel, ValidationError
-    from langchain.output_parsers import PydanticOutputParser
+    from langchain_core.output_parsers import PydanticOutputParser
     from langchain_core.prompts import PromptTemplate
     T = TypeVar('T', bound=BaseModel)
 except ImportError:
@@ -170,7 +170,8 @@ def call_llm(
     response_model: Type[T],
     model_provider: Optional[str] = None,
     context_info: Optional[str] = None,
-    retry_attempt: Optional[int] = None
+    retry_attempt: Optional[int] = None,
+    temperature: Optional[float] = None
 ) -> T:
     """
     Call LLM with comprehensive logging and required pydantic parsing
@@ -210,6 +211,10 @@ def call_llm(
 
     try:
         llm = get_llm_client(model_provider)
+
+        # Override temperature if specified
+        if temperature is not None:
+            llm.temperature = temperature
 
         # Set up pydantic parsing (now required)
         if PydanticOutputParser is None:

@@ -31,7 +31,7 @@ dependencies = [
     "pydantic>=2.0.0",
     "langchain>=0.1.0",
     "langchain-core>=0.1.0",
-    "schedule>=1.1.0",
+    "schedule>=1.2.0",
 ]
 
 [project.optional-dependencies]
@@ -61,6 +61,12 @@ all-mq = [
     "psycopg2-binary>=2.9.0",
 ]
 
+# Data processing
+data = [
+    "duckdb>=1.0.0",
+    "pyyaml>=6.0.0",
+]
+
 # Everything
 all = [
     "langchain-openai>=0.0.5",
@@ -70,6 +76,8 @@ all = [
     "openai>=1.0.0",
     "redis>=4.0.0",
     "psycopg2-binary>=2.9.0",
+    "duckdb>=1.0.0",
+    "pyyaml>=6.0.0",
 ]
 
 # Development dependencies

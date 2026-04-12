@@ -27,11 +27,21 @@ VALID_LEVELS = {
 }
 LOG_LEVEL = VALID_LEVELS.get(DEBUG_LEVEL, logging.INFO)
 
-# Configure logging
+# Configure logging — stdout handler
 logging.basicConfig(
     level=LOG_LEVEL,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
+
+# Attach PostgreSQL log handler if POSTGRES_HOST is available
+if os.getenv('POSTGRES_HOST'):
+    try:
+        from .logging.logger import PostgresLogHandler
+        pg_handler = PostgresLogHandler()
+        pg_handler.setLevel(LOG_LEVEL)
+        logging.getLogger('teenyfactories').addHandler(pg_handler)
+    except Exception:
+        pass  # Don't block startup if handler fails
 
 # =============================================================================
 # POSTGRESQL CONFIGURATION (Message Queue + Job Queue)

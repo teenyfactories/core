@@ -1,0 +1,25 @@
+FROM python:3.11-slim AS build-package
+
+WORKDIR /src
+COPY python/ .
+
+RUN pip install --no-cache-dir build \
+    && python -m build --outdir /dist
+
+# --- Agent runtime image ---
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build-package /dist/*.whl /tmp/
+RUN WHL=$(ls /tmp/*.whl) \
+    && pip install --no-cache-dir "${WHL}[all]" \
+    && rm /tmp/*.whl
+
+WORKDIR /app
+
+COPY default_script.py /app/script.py
+
+CMD ["python", "-u", "/app/script.py"]
