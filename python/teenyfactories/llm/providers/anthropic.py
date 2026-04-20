@@ -16,10 +16,9 @@ class AnthropicProvider(LLMProvider):
 
         return ChatAnthropic(
             anthropic_api_key=os.getenv('ANTHROPIC_API_KEY'),
-            model=os.getenv('ANTHROPIC_MODEL', 'claude-3-sonnet-20240229'),
+            model=os.getenv('DEFAULT_LLM_MODEL', 'claude-sonnet-4-20250514'),
             temperature=0.3
         )
 
     def get_model_name(self) -> str:
-        """Get the Anthropic model name"""
-        return os.getenv('ANTHROPIC_MODEL', 'claude-3-sonnet-20240229')
+        return os.getenv('DEFAULT_LLM_MODEL', 'claude-sonnet-4-20250514')

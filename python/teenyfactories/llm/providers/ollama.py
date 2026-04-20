@@ -15,11 +15,10 @@ class OllamaProvider(LLMProvider):
             raise ImportError("langchain-community not available - install with 'pip install langchain-community'")
 
         return ChatOllama(
-            model=os.getenv('OLLAMA_MODEL', 'gpt-oss:20b'),
+            model=os.getenv('DEFAULT_LLM_MODEL', 'llama2'),
             base_url=os.getenv('OLLAMA_BASE_URL', 'http://host.docker.internal:11434'),
             temperature=0.3
         )
 
     def get_model_name(self) -> str:
-        """Get the Ollama model name"""
-        return os.getenv('OLLAMA_MODEL', 'gpt-oss:20b')
+        return os.getenv('DEFAULT_LLM_MODEL', 'llama2')

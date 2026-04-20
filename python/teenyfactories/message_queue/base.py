@@ -194,6 +194,10 @@ def run_pending(timeout: float = 0.1):
             tf.run_pending()
             tf.sleep(1)
     """
+    # Publish MCP catalog on first tick (deferred so order doesn't matter)
+    from teenyfactories.mcp import _maybe_publish_mcp
+    _maybe_publish_mcp()
+
     _schedule.run_pending()
     _run_next_message(timeout)
 

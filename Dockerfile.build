@@ -18,8 +18,12 @@ RUN WHL=$(ls /tmp/*.whl) \
     && pip install --no-cache-dir "${WHL}[all]" \
     && rm /tmp/*.whl
 
+# Run as non-root user (UID 1000 matches typical host user)
+RUN useradd -u 1000 -m appuser
+USER appuser
+
 WORKDIR /app
 
-COPY default_script.py /app/script.py
+COPY --chown=appuser:appuser default_script.py /app/script.py
 
 CMD ["python", "-u", "/app/script.py"]

@@ -33,11 +33,14 @@ from .llm import get_llm_client, call_llm, clean_json_response
 # Message Queue
 from .message_queue import send_message, on_message, run_pending
 
-# Chat Tools
-from .chat_tools import chat_tool, start_chat_tools
+# MCP Tools
+from .mcp import add_mcp_server, add_mcp_tool
 
 # Data Store
 from .store import store
+
+# Embedding
+from .embedding import embed
 
 # Configuration
 from .config import (
@@ -71,11 +74,14 @@ __all__ = [
     # Message Queue
     'send_message', 'on_message', 'run_pending',
 
-    # Chat Tools
-    'chat_tool', 'start_chat_tools',
+    # MCP Tools
+    'add_mcp_server', 'add_mcp_tool',
 
     # Data Store
     'store',
+
+    # Embedding
+    'embed',
 
     # Scheduling
     'on_schedule',

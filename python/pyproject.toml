@@ -65,6 +65,7 @@ all-mq = [
 data = [
     "duckdb>=1.0.0",
     "pyyaml>=6.0.0",
+    "pymupdf>=1.24.0",
 ]
 
 # Everything
@@ -78,6 +79,7 @@ all = [
     "psycopg2-binary>=2.9.0",
     "duckdb>=1.0.0",
     "pyyaml>=6.0.0",
+    "pymupdf>=1.24.0",
 ]
 
 # Development dependencies

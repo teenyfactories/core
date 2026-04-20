@@ -16,10 +16,9 @@ class OpenAIProvider(LLMProvider):
 
         return ChatOpenAI(
             openai_api_key=os.getenv('OPENAI_API_KEY'),
-            model_name=os.getenv('OPENAI_MODEL', 'gpt-4o-mini'),
+            model_name=os.getenv('DEFAULT_LLM_MODEL', 'gpt-4o-mini'),
             temperature=0.3
         )
 
     def get_model_name(self) -> str:
-        """Get the OpenAI model name"""
-        return os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
+        return os.getenv('DEFAULT_LLM_MODEL', 'gpt-4o-mini')
