@@ -34,13 +34,13 @@ class LLMProvider(ABC):
     """Abstract base class for LLM providers"""
 
     @abstractmethod
-    def get_client(self):
-        """Get the LLM client instance"""
+    def get_client(self, model: Optional[str] = None):
+        """Get the LLM client instance. If model is provided, overrides DEFAULT_LLM_MODEL."""
         pass
 
     @abstractmethod
-    def get_model_name(self) -> str:
-        """Get the model name for this provider"""
+    def get_model_name(self, model: Optional[str] = None) -> str:
+        """Get the model name for this provider. If model is provided, returns it."""
         pass
 
 
@@ -48,57 +48,63 @@ class LLMProvider(ABC):
 # PUBLIC API FUNCTIONS
 # =============================================================================
 
-def get_llm_client(model_provider: Optional[str] = None):
+def get_llm_client(model_provider: Optional[str] = None, model: Optional[str] = None):
     """
     Get an LLM client based on the provider
 
     Args:
         model_provider: Provider name ('openai', 'anthropic', 'google', 'ollama', 'azure_bedrock')
                        If None, uses DEFAULT_LLM_PROVIDER environment variable
+        model: Optional model name override (e.g. 'claude-haiku-4-5-20251001').
+               If None, uses DEFAULT_LLM_MODEL environment variable.
 
     Returns:
         LLM client instance (LangChain compatible)
 
     Example:
         >>> client = get_llm_client('openai')
-        >>> client = get_llm_client()  # Uses DEFAULT_LLM_PROVIDER
+        >>> client = get_llm_client('anthropic', model='claude-haiku-4-5-20251001')
     """
     provider = model_provider or os.getenv('DEFAULT_LLM_PROVIDER', 'openai')
 
     if provider == "openai":
         from .providers.openai import OpenAIProvider
-        return OpenAIProvider().get_client()
+        return OpenAIProvider().get_client(model=model)
 
     elif provider == "anthropic":
         from .providers.anthropic import AnthropicProvider
-        return AnthropicProvider().get_client()
+        return AnthropicProvider().get_client(model=model)
 
     elif provider == "google":
         from .providers.google import GoogleProvider
-        return GoogleProvider().get_client()
+        return GoogleProvider().get_client(model=model)
 
     elif provider == "ollama":
         from .providers.ollama import OllamaProvider
-        return OllamaProvider().get_client()
+        return OllamaProvider().get_client(model=model)
 
     elif provider == "azure_bedrock":
         from .providers.azure_bedrock import AzureBedrockProvider
-        return AzureBedrockProvider().get_client()
+        return AzureBedrockProvider().get_client(model=model)
 
     else:
         raise ValueError(f"Unsupported LLM provider: {provider}")
 
 
-def _get_model_name(provider: Optional[str] = None) -> str:
+def _get_model_name(provider: Optional[str] = None, model: Optional[str] = None) -> str:
     """
     Get the model name based on the provider
 
     Args:
         provider: Provider name
+        model: Optional explicit model name; returned verbatim if provided
 
     Returns:
         Model name string
     """
+    if model:
+        return model
+
     provider = provider or os.getenv('DEFAULT_LLM_PROVIDER', 'openai')
 
     if provider == "openai":
@@ -171,7 +177,8 @@ def call_llm(
     model_provider: Optional[str] = None,
     context_info: Optional[str] = None,
     retry_attempt: Optional[int] = None,
-    temperature: Optional[float] = None
+    temperature: Optional[float] = None,
+    model: Optional[str] = None
 ) -> T:
     """
     Call LLM with comprehensive logging and required pydantic parsing
@@ -183,6 +190,9 @@ def call_llm(
         model_provider: Optional provider name (defaults to DEFAULT_LLM_PROVIDER)
         context_info: Optional context information for logging
         retry_attempt: Optional retry attempt number for logging
+        temperature: Optional temperature override
+        model: Optional model name override, e.g. 'claude-haiku-4-5-20251001'.
+               If omitted, provider falls back to DEFAULT_LLM_MODEL env var.
 
     Returns:
         Parsed response as instance of response_model
@@ -200,7 +210,10 @@ def call_llm(
         >>>
         >>> template = PromptTemplate.from_template("Analyze: {text}")
         >>> result = call_llm(template, {"text": "sample"}, AnalysisResult)
-        >>> print(result.summary)
+        >>> # Per-call model override for cheap calls:
+        >>> result = call_llm(template, {"text": "sample"}, AnalysisResult,
+        ...                   model_provider='anthropic',
+        ...                   model='claude-haiku-4-5-20251001')
     """
     start_time = time.time()
     success = False
@@ -210,7 +223,7 @@ def call_llm(
     parsed_response = None
 
     try:
-        llm = get_llm_client(model_provider)
+        llm = get_llm_client(model_provider, model=model)
 
         # Override temperature if specified
         if temperature is not None:
@@ -296,7 +309,7 @@ def call_llm(
                 'timestamp': get_aest_now().isoformat(),
                 'project': PROJECT_NAME,
                 'provider': model_provider or os.getenv('DEFAULT_LLM_PROVIDER', 'openai'),
-                'model': _get_model_name(model_provider),
+                'model': _get_model_name(model_provider, model=model),
                 'temperature': 0.3,
                 'context': context_info,
                 'retry_attempt': retry_attempt,

@@ -1,9 +1,13 @@
 """
 MCP Tool Registration
 
-Allows factory workers to expose tools to the orchestrator's LLM chat agent
-via MCP (Model Context Protocol) format. Tools are cataloged through
-factory_states and requests are routed through the same pub/sub mechanism.
+Factories expose tools to the orchestrator's LLM chat via dedicated collections
+in factory_data:
+
+- `_mcp_tool_catalog` — one row per agent. key=AGENT_NAME. value={server, tools}
+  if MCP is configured, else {}. Written once on first `tf.run_pending()`.
+- `_mcp_{toolname}` — one row per call. key=correlation_id.
+  state progresses 'request' -> 'response' on the same row.
 
 Usage:
     import teenyfactories as tf
@@ -23,22 +27,26 @@ Usage:
         }) \\
         .do(handle_query)
 
-    # Order of add_mcp_server() vs add_mcp_tool() doesn't matter.
-    # Catalog is published on first tf.run_pending() call.
+Order of add_mcp_server() vs add_mcp_tool() doesn't matter. The catalog row
+is written and per-tool state subscriptions are registered on the first
+`tf.run_pending()` tick.
 """
 
-import json
+import os
 from typing import Callable, Dict, Any, Optional, List
 
 from .logging import log_info, log_error, log_debug
 
-# Module-level registries
+# Module-level registry
 _mcp_server: Optional[Dict[str, str]] = None
 _mcp_tools: List[Dict[str, Any]] = []
 _mcp_handlers: Dict[str, Callable] = {}
-_mcp_pending: bool = False
 _mcp_published: bool = False
 
+
+# =============================================================================
+# Public API — registration
+# =============================================================================
 
 class McpToolBuilder:
     """Fluent builder for tf.add_mcp_tool('name', 'description').with_input({...}).do(handler)"""
@@ -66,98 +74,123 @@ class McpToolBuilder:
 
 
 def add_mcp_tool(name: str, description: str) -> McpToolBuilder:
-    """Register an MCP tool. Call before or after add_mcp_server() — order doesn't matter.
-
-    Usage:
-        tf.add_mcp_tool('query_spend', 'Query spend data') \\
-            .with_input({"type": "object", "properties": {...}}) \\
-            .do(handler_function)
-    """
+    """Register an MCP tool. Call before or after add_mcp_server() — order doesn't matter."""
     return McpToolBuilder(name, description)
 
 
 def add_mcp_server(name: str, description: str = ''):
-    """Declare the MCP server metadata. Catalog is published on first run_pending() call.
-
-    Usage:
-        tf.add_mcp_server(name='spend-data', description='Spend analysis tools')
-    """
-    global _mcp_server, _mcp_pending
+    """Declare the MCP server metadata. Catalog row is published on first run_pending()."""
+    global _mcp_server
     _mcp_server = {'name': name, 'description': description}
-    _mcp_pending = True
     log_info(f"MCP server declared: {name}")
 
 
+# =============================================================================
+# Catalog publish + per-tool subscribe (called by run_pending on first tick)
+# =============================================================================
+
+def _agent_name() -> str:
+    return os.getenv('AGENT_NAME', 'unknown')
+
+
 def _maybe_publish_mcp():
-    """Called by run_pending() on first tick. Publishes catalog and starts listener.
-    This is deferred so that order of add_mcp_server() vs add_mcp_tool() doesn't matter."""
-    global _mcp_pending, _mcp_published
-
-    if not _mcp_pending or _mcp_published:
+    """Idempotent. Writes the catalog row and subscribes per-tool state handlers."""
+    global _mcp_published
+    if _mcp_published:
         return
-    if not _mcp_server:
-        return
-    if not _mcp_tools:
-        log_info("MCP server declared but no tools registered, skipping publish")
-        return
-
-    _mcp_pending = False
     _mcp_published = True
 
-    # Import here to avoid circular imports
-    from .message_queue import send_message, on_message
+    from .store import store
+    from .message_queue import on_state
 
-    # Publish catalog so the orchestrator knows what tools are available
-    send_message('mcp_tool_catalog').with_data({
-        'server': _mcp_server,
-        'tools': _mcp_tools,
-    })
-    log_info(f"Published MCP catalog: {_mcp_server['name']} ({len(_mcp_tools)} tools: {[t['name'] for t in _mcp_tools]})")
+    agent_name = _agent_name()
+    has_tools = bool(_mcp_server and _mcp_tools)
 
-    # Subscribe to tool requests
-    on_message('mcp_tool_request').do(_handle_mcp_request)
-    log_info("Listening for MCP tool requests")
-
-
-def _handle_mcp_request(message):
-    """Handle incoming MCP tool requests from the orchestrator."""
-    from .message_queue import send_message
-
-    data = message.get('data', {})
-    tool_name = data.get('tool_name')
-    correlation_id = data.get('correlation_id')
-    params = data.get('params', {})
-
-    if not tool_name or not correlation_id:
-        log_error("Invalid MCP tool request: missing tool_name or correlation_id")
-        return
-
-    handler = _mcp_handlers.get(tool_name)
-    if not handler:
-        log_error(f"Unknown MCP tool: {tool_name}")
-        send_message('mcp_tool_response').with_data({
-            'correlation_id': correlation_id,
-            'error': f'Unknown tool: {tool_name}',
-        })
-        return
+    if has_tools:
+        catalog_value = {
+            'server': _mcp_server,
+            'tools': [
+                {**tool, 'agent': agent_name}
+                for tool in _mcp_tools
+            ],
+        }
+    else:
+        catalog_value = {}
 
     try:
-        log_debug(f"Executing MCP tool: {tool_name}")
-        result = handler(params)
-
-        # Ensure result is JSON-serializable
-        if not isinstance(result, (dict, list, str, int, float, bool, type(None))):
-            result = str(result)
-
-        send_message('mcp_tool_response').with_data({
-            'correlation_id': correlation_id,
-            'result': result,
-        })
-        log_info(f"MCP tool {tool_name} completed")
-
+        store('_mcp_tool_catalog').set(
+            key=agent_name,
+            value=catalog_value,
+            state='registered',
+        )
     except Exception as e:
-        log_error(f"MCP tool {tool_name} failed: {e}")
-        send_message('mcp_tool_response').with_data({
-            'correlation_id': correlation_id,
-            'error': str(e),
-        })
+        log_error(f"Failed to write MCP catalog row: {e}")
+        # Fall through so per-tool subscriptions still register
+
+    if has_tools:
+        tool_names = [t['name'] for t in _mcp_tools]
+        log_info(
+            f"Published MCP catalog for agent '{agent_name}': "
+            f"{len(_mcp_tools)} tools ({tool_names})"
+        )
+        # Subscribe to a dedicated call inbox per tool.
+        for tool in _mcp_tools:
+            collection = f"_mcp_{tool['name']}"
+            # Pin the tool_name into the closure
+            handler = _make_tool_state_handler(tool['name'])
+            on_state(collection, 'request').do(handler)
+            log_debug(f"Listening for calls on {collection}.request")
+    else:
+        log_info(
+            f"Agent '{agent_name}' has no MCP tools — wrote empty catalog row"
+        )
+
+
+def _make_tool_state_handler(tool_name: str):
+    """Build a handler closure for this tool's 'request' state transition."""
+    from .store import store
+
+    def handler(item):
+        value = item.get('value') or {}
+        key = item['key']
+
+        # Agent routing — silently skip if this request was targeted elsewhere
+        target_agent = value.get('agent')
+        our_agent = _agent_name()
+        if target_agent and target_agent != our_agent:
+            return
+
+        fn = _mcp_handlers.get(tool_name)
+        if not fn:
+            # Shouldn't happen given subscription only occurs for registered tools,
+            # but we might still receive replay for a tool we no longer expose.
+            log_error(f"No handler registered for MCP tool: {tool_name}")
+            store(f"_mcp_{tool_name}").set(
+                key=key,
+                value={**value, 'error': f'No handler for tool {tool_name}'},
+                state='response',
+            )
+            return
+
+        params = value.get('params', {})
+        log_debug(f"Executing MCP tool: {tool_name} (correlation_id={key})")
+
+        try:
+            result = fn(params)
+            if not isinstance(result, (dict, list, str, int, float, bool, type(None))):
+                result = str(result)
+            store(f"_mcp_{tool_name}").set(
+                key=key,
+                value={**value, 'result': result},
+                state='response',
+            )
+            log_info(f"MCP tool {tool_name} completed (correlation_id={key})")
+        except Exception as e:
+            log_error(f"MCP tool {tool_name} failed: {e}")
+            store(f"_mcp_{tool_name}").set(
+                key=key,
+                value={**value, 'error': str(e)},
+                state='response',
+            )
+
+    return handler

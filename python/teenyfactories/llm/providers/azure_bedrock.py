@@ -2,6 +2,7 @@
 
 import os
 import urllib.parse
+from typing import Optional
 from teenyfactories.llm.base import LLMProvider
 
 
@@ -33,12 +34,14 @@ class AzureBedrockProvider(LLMProvider):
         query_params = urllib.parse.parse_qs(parsed.query)
         self.azure_api_version = query_params.get('api-version', ['2025-01-01-preview'])[0]
 
-    def get_client(self):
-        """Get Azure Bedrock LLM client"""
+    def get_client(self, model: Optional[str] = None):
+        """Get Azure Bedrock LLM client. Optional `model` overrides the deployment name."""
         try:
             from langchain_openai import AzureChatOpenAI
         except ImportError:
             raise ImportError("langchain-openai not available - install with 'pip install langchain-openai'")
+
+        deployment = model or self.azure_deployment
 
         # Create Azure OpenAI client using LangChain
         # Note: o3 models don't support temperature parameter
@@ -46,11 +49,11 @@ class AzureBedrockProvider(LLMProvider):
             'api_key': self.bedrock_key,
             'openai_api_version': self.azure_api_version,
             'azure_endpoint': self.azure_endpoint,
-            'azure_deployment': self.azure_deployment,
+            'azure_deployment': deployment,
         }
 
         # Handle temperature parameter based on model type
-        if 'o3' in self.azure_deployment.lower():
+        if 'o3' in deployment.lower():
             # o3 models don't support temperature - use raw OpenAI client wrapper
             from openai import AzureOpenAI
             from langchain_core.runnables import Runnable
@@ -97,12 +100,12 @@ class AzureBedrockProvider(LLMProvider):
                 azure_endpoint=self.azure_endpoint
             )
 
-            return O3AzureWrapper(raw_client, self.azure_deployment)
+            return O3AzureWrapper(raw_client, deployment)
         else:
             # Other models support temperature
             client_kwargs['temperature'] = 0.3
             return AzureChatOpenAI(**client_kwargs)
 
-    def get_model_name(self) -> str:
+    def get_model_name(self, model: Optional[str] = None) -> str:
         """Get the Azure Bedrock model name"""
-        return self.azure_deployment
+        return model or self.azure_deployment

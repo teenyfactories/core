@@ -25,13 +25,13 @@ from .__version__ import __version__
 from .logging import log, log_debug, log_info, log_warn, log_error, log_persona
 
 # Utilities
-from .utils import get_aest_now, get_timestamp, generate_unique_id, AEST_TIMEZONE
+from .utils import get_aest_now, get_timestamp, generate_unique_id
 
 # LLM
-from .llm import get_llm_client, call_llm, clean_json_response
+from .llm import call_llm
 
 # Message Queue
-from .message_queue import send_message, on_message, run_pending
+from .message_queue import send_message, on_message, on_state, run_pending
 
 # MCP Tools
 from .mcp import add_mcp_server, add_mcp_tool
@@ -42,16 +42,9 @@ from .store import store
 # Embedding
 from .embedding import embed
 
-# Configuration
-from .config import (
-    PROJECT_NAME,
-    FACTORY_PREFIX,
-    POSTGRES_HOST,
-    POSTGRES_PORT,
-    POSTGRES_DB,
-    POSTGRES_USER,
-    POSTGRES_PASSWORD,
-)
+# Configuration (factory-visible values only — connection env vars are
+# internal and accessed directly via os.getenv inside the core.)
+from .config import PROJECT_NAME, FACTORY_PREFIX
 
 # Scheduling — delegates to the schedule library
 on_schedule = _schedule.default_scheduler
@@ -66,13 +59,13 @@ __all__ = [
     'log', 'log_debug', 'log_info', 'log_warn', 'log_error', 'log_persona',
 
     # Utilities
-    'get_aest_now', 'get_timestamp', 'generate_unique_id', 'AEST_TIMEZONE',
+    'get_aest_now', 'get_timestamp', 'generate_unique_id',
 
     # LLM
-    'get_llm_client', 'call_llm', 'clean_json_response',
+    'call_llm',
 
     # Message Queue
-    'send_message', 'on_message', 'run_pending',
+    'send_message', 'on_message', 'on_state', 'run_pending',
 
     # MCP Tools
     'add_mcp_server', 'add_mcp_tool',
@@ -91,5 +84,4 @@ __all__ = [
 
     # Configuration
     'PROJECT_NAME', 'FACTORY_PREFIX',
-    'POSTGRES_HOST', 'POSTGRES_PORT', 'POSTGRES_DB', 'POSTGRES_USER', 'POSTGRES_PASSWORD',
 ]
