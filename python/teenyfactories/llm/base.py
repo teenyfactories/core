@@ -21,6 +21,7 @@ except ImportError:
     PromptTemplate = None
     T = TypeVar('T')
 
+from teenyfactories import config
 from teenyfactories.config import PROJECT_NAME
 from teenyfactories.logging import log_info, log_error, log_debug, log_warn
 from teenyfactories.utils import get_aest_now
@@ -65,7 +66,7 @@ def get_llm_client(model_provider: Optional[str] = None, model: Optional[str] = 
         >>> client = get_llm_client('openai')
         >>> client = get_llm_client('anthropic', model='claude-haiku-4-5-20251001')
     """
-    provider = model_provider or os.getenv('DEFAULT_LLM_PROVIDER', 'openai')
+    provider = model_provider or config.require_llm_provider()
 
     if provider == "openai":
         from .providers.openai import OpenAIProvider
@@ -105,7 +106,7 @@ def _get_model_name(provider: Optional[str] = None, model: Optional[str] = None)
     if model:
         return model
 
-    provider = provider or os.getenv('DEFAULT_LLM_PROVIDER', 'openai')
+    provider = provider or config.require_llm_provider()
 
     if provider == "openai":
         from .providers.openai import OpenAIProvider
@@ -287,10 +288,16 @@ def call_llm(
         # Extract token information if available
         if hasattr(result, 'usage_metadata') and result.usage_metadata is not None:
             usage = result.usage_metadata
+            # langchain exposes cache token counts under input_token_details.
+            # Anthropic: {'cache_read': N, 'cache_creation': N}.
+            # OpenAI: {'cache_read': N} (no creation — auto-cache).
+            details = usage.get('input_token_details') or {}
             token_info = {
                 'input_tokens': usage.get('input_tokens', 0),
                 'output_tokens': usage.get('output_tokens', 0),
-                'total_tokens': usage.get('total_tokens', 0)
+                'total_tokens': usage.get('total_tokens', 0),
+                'cached_input_tokens': details.get('cache_read', 0) or 0,
+                'cache_creation_tokens': details.get('cache_creation', 0) or 0,
             }
 
         success = True
@@ -301,33 +308,47 @@ def call_llm(
 
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
+        used_provider = model_provider or config.require_llm_provider()
+        used_model = _get_model_name(model_provider, model=model)
 
         # Log the LLM usage (simplified - no file storage)
         try:
-            usage_log = {
-                'id': str(uuid.uuid4()),
-                'timestamp': get_aest_now().isoformat(),
-                'project': PROJECT_NAME,
-                'provider': model_provider or os.getenv('DEFAULT_LLM_PROVIDER', 'openai'),
-                'model': _get_model_name(model_provider, model=model),
-                'temperature': 0.3,
-                'context': context_info,
-                'retry_attempt': retry_attempt,
-                'duration_ms': duration_ms,
-                'input_tokens': token_info.get('input_tokens'),
-                'output_tokens': token_info.get('output_tokens'),
-                'total_tokens': token_info.get('total_tokens'),
-                'response_model': response_model.__name__ if response_model else None,
-                'parsed_successfully': parsed_response is not None,
-                'success': success,
-                'error': error_message
-            }
-
-            # Log to debug
-            log_debug(f"📊 LLM Usage: {usage_log.get('provider')}/{usage_log.get('model')} - {duration_ms}ms")
-
+            log_debug(f"📊 LLM Usage: {used_provider}/{used_model} - {duration_ms}ms")
         except Exception as log_err:
             log_warn(f"⚠️ Failed to log LLM usage: {log_err}")
+
+        # Persist usage row to factory_logs via record_llm_usage().
+        # Failures are swallowed inside log_usage — never breaks the call.
+        try:
+            from teenyfactories.usage_recorder import log_usage
+            # Best-effort prompt preview: render the template if we can,
+            # otherwise fall back to the inputs dict stringified.
+            preview_src = None
+            try:
+                if hasattr(prompt_template, 'format'):
+                    preview_src = prompt_template.format(**(prompt_inputs or {}))
+                else:
+                    preview_src = str(prompt_template)
+            except Exception:
+                preview_src = str(prompt_inputs)[:200]
+
+            log_usage(
+                call_kind='llm',
+                provider=used_provider,
+                model=used_model,
+                input_tokens=token_info.get('input_tokens', 0) or 0,
+                cached_input_tokens=token_info.get('cached_input_tokens', 0) or 0,
+                cache_creation_tokens=token_info.get('cache_creation_tokens', 0) or 0,
+                output_tokens=token_info.get('output_tokens', 0) or 0,
+                latency_ms=duration_ms,
+                request_id=str(uuid.uuid4()),
+                chat_id=None,
+                prompt_preview=preview_src,
+            )
+        except Exception as usage_err:
+            # Defensive: log_usage already swallows internally, this only
+            # fires if the import itself blows up.
+            log_warn(f"⚠️ usage_recorder unavailable: {usage_err}")
 
     if success:
         if parsed_response:

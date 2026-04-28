@@ -1,7 +1,7 @@
 """Ollama LLM provider implementation"""
 
-import os
 from typing import Optional
+from teenyfactories import config
 from teenyfactories.llm.base import LLMProvider
 
 
@@ -16,10 +16,10 @@ class OllamaProvider(LLMProvider):
             raise ImportError("langchain-community not available - install with 'pip install langchain-community'")
 
         return ChatOllama(
-            model=model or os.getenv('DEFAULT_LLM_MODEL', 'llama2'),
-            base_url=os.getenv('OLLAMA_BASE_URL', 'http://host.docker.internal:11434'),
+            model=model or config.require_llm_model(),
+            base_url=config.get('OLLAMA_BASE_URL', config.OLLAMA_DEFAULT_BASE_URL),
             temperature=0.3
         )
 
     def get_model_name(self, model: Optional[str] = None) -> str:
-        return model or os.getenv('DEFAULT_LLM_MODEL', 'llama2')
+        return model or config.require_llm_model()

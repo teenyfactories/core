@@ -6,7 +6,6 @@ subscribers register, and surfaces raw notifications. All topic logic is in
 ``message_queue.base``.
 """
 
-import os
 import json
 from typing import List, Optional
 
@@ -16,6 +15,7 @@ try:
 except ImportError:
     psycopg2 = None
 
+from teenyfactories import config
 from teenyfactories.logging import log_info, log_error
 
 
@@ -25,27 +25,26 @@ class PostgresProvider:
     def __init__(self):
         self.connection = None
         self.cursor = None                # Used for reads AND direct writes to factory_data
-        self._factory_name = os.getenv('FACTORY_PREFIX', '')
-        self._agent_name = os.getenv('AGENT_NAME', 'unknown')
+        self._factory_name = config.FACTORY_PREFIX
+        self._agent_name = config.AGENT_NAME
         self._listening = set()           # set of channel names we've LISTENed on
 
     def connect(self):
         if psycopg2 is None:
             raise ImportError("psycopg2 not available — install with 'pip install psycopg2-binary'")
 
-        pg_host = os.getenv('POSTGRES_HOST', 'postgres')
-        pg_port = int(os.getenv('POSTGRES_PORT', '5432'))
-        pg_db = os.getenv('POSTGRES_DB', 'teenyfactories')
-        pg_user = os.getenv('POSTGRES_USER', 'postgres')
-        pg_password = os.getenv('POSTGRES_PASSWORD', 'postgres')
-
-        conn_args = dict(host=pg_host, port=pg_port, database=pg_db,
-                         user=pg_user, password=pg_password)
+        conn_args = dict(
+            host=config.POSTGRES_HOST,
+            port=config.POSTGRES_PORT,
+            database=config.POSTGRES_DB,
+            user=config.POSTGRES_USER,
+            password=config.POSTGRES_PASSWORD,
+        )
         self.connection = psycopg2.connect(**conn_args)
         self.connection.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
         self.cursor = self.connection.cursor()
 
-        log_info(f"Connected to PostgreSQL at {pg_host}:{pg_port}/{pg_db}")
+        log_info(f"Connected to PostgreSQL at {config.POSTGRES_HOST}:{config.POSTGRES_PORT}/{config.POSTGRES_DB}")
 
     # =========================================================================
     # LISTEN / NOTIFY

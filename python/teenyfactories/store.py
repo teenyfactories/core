@@ -20,12 +20,12 @@ Usage:
     tf.store('preferences').delete('key1')
 """
 
-import os
 import json
 import re
 import uuid
 from typing import Optional, List, Dict, Any, Union
 
+from . import config
 from .logging import log_error
 
 _SUPPORTED_DIMS = (256, 512, 768, 1024, 1536, 3072)
@@ -39,7 +39,7 @@ def _get_connection():
     """Get a database connection using the provider's connection."""
     from .message_queue.base import _get_provider
     provider = _get_provider()
-    return provider.cursor, os.getenv('FACTORY_PREFIX', '')
+    return provider.cursor, config.FACTORY_PREFIX
 
 
 def _validate_collection(collection: str):

@@ -12,7 +12,6 @@ Two subscription primitives are exposed to factory code:
 Both are driven by the single LISTEN/NOTIFY loop in `run_pending()`.
 """
 
-import os
 import schedule as _schedule
 from typing import Callable, Optional, Dict, List
 
@@ -191,7 +190,7 @@ def on_state(collection: str, state: str) -> StateSubscriptionBuilder:
 
 def _register_subscription(collection: str, state: str, handler: Callable, replay: bool):
     provider = _get_provider()
-    factory_name = FACTORY_PREFIX or os.getenv('FACTORY_PREFIX', '')
+    factory_name = FACTORY_PREFIX
 
     channel = f"{factory_name}.{collection}.{state}"
     if len(channel) > 63:

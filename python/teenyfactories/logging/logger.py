@@ -18,10 +18,15 @@ class PostgresLogHandler(logging.Handler):
 
     def __init__(self):
         super().__init__()
+        # Lazy-import config to avoid an import cycle (config attaches this
+        # handler when POSTGRES_HOST is set).
+        from .. import config as _config
         self._conn = None
         self._cursor = None
-        self._factory_name = os.getenv('FACTORY_NAME', 'unknown')
-        self._service_name = os.getenv('AGENT_NAME', 'unknown')
+        self._factory_name = _config.FACTORY_NAME
+        self._service_name = _config.AGENT_NAME
+        # HOSTNAME is injected by Docker itself, not by our orchestrator —
+        # read from os directly.
         self._container_id = os.getenv('HOSTNAME', '')[:12] if os.getenv('HOSTNAME') else None
         self._suppress = False  # Set True to skip next emit (used by log_persona)
 
@@ -33,13 +38,14 @@ class PostgresLogHandler(logging.Handler):
         try:
             import psycopg2
             import psycopg2.extensions
+            from .. import config as _config
 
             self._conn = psycopg2.connect(
-                host=os.getenv('POSTGRES_HOST', 'postgres'),
-                port=int(os.getenv('POSTGRES_PORT', '5432')),
-                database=os.getenv('POSTGRES_DB', 'teenyfactories'),
-                user=os.getenv('POSTGRES_USER', 'postgres'),
-                password=os.getenv('POSTGRES_PASSWORD', 'postgres')
+                host=_config.POSTGRES_HOST,
+                port=_config.POSTGRES_PORT,
+                database=_config.POSTGRES_DB,
+                user=_config.POSTGRES_USER,
+                password=_config.POSTGRES_PASSWORD
             )
             self._conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
             self._cursor = self._conn.cursor()
@@ -144,8 +150,9 @@ def log_persona(message, metadata=None):
             if isinstance(handler, PostgresLogHandler):
                 cursor = handler._get_connection()
                 if cursor:
-                    factory = os.getenv('FACTORY_NAME', 'unknown')
-                    service = os.getenv('AGENT_NAME', 'unknown')
+                    from .. import config as _config
+                    factory = _config.FACTORY_NAME
+                    service = _config.AGENT_NAME
                     container = os.getenv('HOSTNAME', '')[:12] if os.getenv('HOSTNAME') else None
 
                     cursor.execute(

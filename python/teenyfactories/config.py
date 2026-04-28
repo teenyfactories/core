@@ -1,67 +1,157 @@
-"""Configuration and environment variable management for teenyfactories"""
+"""
+Configuration and environment-variable management for teenyfactories.
 
-import os
+Single source of truth for env-var reads inside the framework. Agents
+themselves never call os.getenv directly — they get their values from
+the orchestrator's container injection (POSTGRES_*, FACTORY_NAME,
+AGENT_NAME, etc.) or from the tf API which reads them via this module.
+
+Two access patterns:
+  • Constants for values that have sensible defaults (POSTGRES_HOST,
+    POSTGRES_DB) — read once at import time.
+  • `require(name)` raises a clear RuntimeError if the variable is unset
+    or empty. Use this for credentials and other "must be set" values
+    instead of letting None propagate to a downstream SDK error.
+
+Policy (set with the user 2026-04-28):
+  • Mandatory values fail loud at use-site — no silent defaults.
+  • The orchestrator-side compose file uses `${VAR:?required}` so missing
+    values fail at compose-up too; this module is the runtime backstop
+    when an agent runs outside the orchestrator's spawning path.
+"""
+
 import logging
+import os
+
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load .env when running outside Docker (no-op inside containers — env is
+# already populated by the orchestrator's container manager).
 load_dotenv()
 
-# =============================================================================
-# PROJECT CONFIGURATION
-# =============================================================================
 
-PROJECT_NAME = os.getenv('PROJECT_NAME', 'TeenyFactories')
-FACTORY_PREFIX = os.getenv('FACTORY_PREFIX', '')
+# ── Helpers ─────────────────────────────────────────────────────────────────
 
-# =============================================================================
-# LOGGING CONFIGURATION
-# =============================================================================
 
-DEBUG_LEVEL = os.getenv('DEBUG_LEVEL', 'INFO').upper()
-VALID_LEVELS = {
-    'DEBUG': logging.DEBUG,
-    'INFO': logging.INFO,
-    'WARN': logging.WARNING,
-    'ERROR': logging.ERROR
+def get(name: str, default: str | None = None) -> str | None:
+    """Read an environment variable with an optional default. Empty strings
+    are treated as unset."""
+    val = os.environ.get(name)
+    if val is None or val == "":
+        return default
+    return val
+
+
+def require(name: str, hint: str | None = None) -> str:
+    """Read an environment variable; raise RuntimeError if unset/empty."""
+    val = os.environ.get(name)
+    if val is None or val == "":
+        suffix = f" — {hint}" if hint else ""
+        raise RuntimeError(
+            f"Required environment variable {name} is not set{suffix}. "
+            f"The orchestrator should have injected this; if you're running "
+            f"the agent outside the orchestrator, set it in your .env."
+        )
+    return val
+
+
+# ── Project-level identifiers (set per-container by the orchestrator) ───────
+
+# Display label for log lines / usage reports. Not container-injected;
+# safe to default.
+PROJECT_NAME = get("PROJECT_NAME", "TeenyFactories")
+
+# Set by orchestrator/backend/services/containerManager.js when spawning
+# each agent container. Always set in normal operation; the empty-string
+# fallback only fires in dev runs outside the orchestrator.
+FACTORY_PREFIX = get("FACTORY_PREFIX", "")
+FACTORY_NAME = get("FACTORY_NAME", "unknown")
+AGENT_NAME = get("AGENT_NAME", "unknown")
+
+
+# ── Logging ────────────────────────────────────────────────────────────────
+
+DEBUG_LEVEL = (get("DEBUG_LEVEL", "INFO") or "INFO").upper()
+_LEVEL_MAP = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARN": logging.WARNING,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
 }
-LOG_LEVEL = VALID_LEVELS.get(DEBUG_LEVEL, logging.INFO)
+LOG_LEVEL = _LEVEL_MAP.get(DEBUG_LEVEL, logging.INFO)
 
-# Configure logging — stdout handler
 logging.basicConfig(
     level=LOG_LEVEL,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
-# Attach PostgreSQL log handler if POSTGRES_HOST is available
-if os.getenv('POSTGRES_HOST'):
+# Attach Postgres log handler if a host was injected.
+if get("POSTGRES_HOST"):
     try:
-        from .logging.logger import PostgresLogHandler
-        pg_handler = PostgresLogHandler()
-        pg_handler.setLevel(LOG_LEVEL)
-        logging.getLogger('teenyfactories').addHandler(pg_handler)
+        from .logging.logger import PostgresLogHandler  # noqa: WPS433 — local import to break cycle
+
+        _pg_handler = PostgresLogHandler()
+        _pg_handler.setLevel(LOG_LEVEL)
+        logging.getLogger("teenyfactories").addHandler(_pg_handler)
     except Exception:
-        pass  # Don't block startup if handler fails
+        # Don't block agent startup if the handler can't initialise — the
+        # stdout handler still works.
+        pass
 
-# =============================================================================
-# POSTGRESQL CONFIGURATION (Message Queue + Job Queue)
-# =============================================================================
 
-POSTGRES_HOST = os.getenv('POSTGRES_HOST', 'postgres')
-POSTGRES_PORT = int(os.getenv('POSTGRES_PORT', '5432'))
-POSTGRES_DB = os.getenv('POSTGRES_DB', 'teenyfactories')
-POSTGRES_USER = os.getenv('POSTGRES_USER', 'postgres')
-POSTGRES_PASSWORD = os.getenv('POSTGRES_PASSWORD', 'postgres')
+# ── Postgres connection (factory data plane + message queue) ───────────────
 
-# =============================================================================
-# LLM PROVIDER CONFIGURATION
-# =============================================================================
+POSTGRES_HOST = get("POSTGRES_HOST", "postgres")
+POSTGRES_PORT = int(get("POSTGRES_PORT", "5432") or "5432")
+POSTGRES_DB = get("POSTGRES_DB", "teenyfactories")
+POSTGRES_USER = get("POSTGRES_USER", "teenyfactories")
+# No default — orchestrator always injects this. Agents started outside
+# the orchestrator must set it explicitly.
+POSTGRES_PASSWORD = require("POSTGRES_PASSWORD", "orchestrator database password") if get("POSTGRES_HOST") else None
 
-DEFAULT_LLM_PROVIDER = os.getenv('DEFAULT_LLM_PROVIDER', 'openai')
 
-# Provider-specific environment variables are read directly by provider classes
-# OpenAI: OPENAI_API_KEY, OPENAI_MODEL
-# Anthropic: ANTHROPIC_API_KEY, ANTHROPIC_MODEL
-# Google: GOOGLE_API_KEY, GOOGLE_MODEL
-# Ollama: OLLAMA_MODEL, OLLAMA_BASE_URL
-# Azure Bedrock: AZURE_BEDROCK_LLM_URL, AZURE_BEDROCK_LLM_KEY
+# ── LLM provider resolution (mandatory at use-site) ────────────────────────
+
+
+def require_llm_provider() -> str:
+    """Resolve the active LLM provider name. Raises if DEFAULT_LLM_PROVIDER
+    is unset; agents never get a silent default."""
+    return require(
+        "DEFAULT_LLM_PROVIDER",
+        "one of: openai, anthropic, google, ollama, azure_bedrock",
+    )
+
+
+def require_llm_model() -> str:
+    """Resolve the active LLM model name. Raises if DEFAULT_LLM_MODEL is unset."""
+    return require("DEFAULT_LLM_MODEL", "specific model name for the chosen provider")
+
+
+def require_embedding_provider() -> str:
+    return require("DEFAULT_EMBEDDING_PROVIDER", "one of: openai, ollama")
+
+
+def require_embedding_model() -> str:
+    return require("DEFAULT_EMBEDDING_MODEL", "specific embedding model name")
+
+
+def require_api_key(provider: str) -> str:
+    """Resolve the API key (or base URL) for a given provider. Raises with
+    a clear message instead of letting None propagate to the SDK."""
+    var_name = {
+        "openai": "OPENAI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "google": "GOOGLE_API_KEY",
+        "ollama": "OLLAMA_BASE_URL",
+        "azure_bedrock": "AZURE_BEDROCK_LLM_KEY",
+    }.get(provider)
+    if not var_name:
+        raise RuntimeError(f"Unknown LLM provider '{provider}'")
+    return require(var_name, f"required by DEFAULT_LLM_PROVIDER='{provider}'")
+
+
+# Default Ollama base URL — picked to match what works inside Docker
+# containers (host.docker.internal resolves to the Docker host on macOS,
+# Windows, and Linux with --add-host=host.docker.internal:host-gateway).
+OLLAMA_DEFAULT_BASE_URL = "http://host.docker.internal:11434"

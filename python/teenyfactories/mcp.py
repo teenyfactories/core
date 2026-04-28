@@ -32,9 +32,9 @@ is written and per-tool state subscriptions are registered on the first
 `tf.run_pending()` tick.
 """
 
-import os
 from typing import Callable, Dict, Any, Optional, List
 
+from . import config
 from .logging import log_info, log_error, log_debug
 
 # Module-level registry
@@ -90,7 +90,7 @@ def add_mcp_server(name: str, description: str = ''):
 # =============================================================================
 
 def _agent_name() -> str:
-    return os.getenv('AGENT_NAME', 'unknown')
+    return config.AGENT_NAME
 
 
 def _maybe_publish_mcp():

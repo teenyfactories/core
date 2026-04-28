@@ -1,8 +1,8 @@
 """Azure Bedrock LLM provider implementation"""
 
-import os
 import urllib.parse
 from typing import Optional
+from teenyfactories import config
 from teenyfactories.llm.base import LLMProvider
 
 
@@ -10,11 +10,8 @@ class AzureBedrockProvider(LLMProvider):
     """Azure Bedrock implementation of LLM provider (supports O3 models)"""
 
     def __init__(self):
-        self.bedrock_url = os.getenv('AZURE_BEDROCK_LLM_URL')
-        self.bedrock_key = os.getenv('AZURE_BEDROCK_LLM_KEY')
-
-        if not self.bedrock_url or not self.bedrock_key:
-            raise ValueError("Azure Bedrock requires AZURE_BEDROCK_LLM_URL and AZURE_BEDROCK_LLM_KEY environment variables")
+        self.bedrock_url = config.require('AZURE_BEDROCK_LLM_URL', 'required by DEFAULT_LLM_PROVIDER=azure_bedrock')
+        self.bedrock_key = config.require('AZURE_BEDROCK_LLM_KEY', 'required by DEFAULT_LLM_PROVIDER=azure_bedrock')
 
         # Parse the URL to extract components
         # URL format: https://resource.openai.azure.com/openai/deployments/deployment/chat/completions?api-version=version
