@@ -1,10 +1,22 @@
-"""Logging implementation for teenyfactories"""
+"""Logging implementation for teenyfactories.
 
-import os
+Public API: five functions, all the same shape — `(message: str)`.
+
+    tf.log_debug(message)
+    tf.log_info(message)
+    tf.log_warn(message)
+    tf.log_error(message)
+    tf.log_persona(message)
+
+Each writes to stdout via the stdlib `logging` module AND, when configured,
+into the `factory_logs` PostgreSQL table via `PostgresLogHandler`.
+`log_persona` writes a separate `level='persona'` row used by the chat UI
+for first-person speech-bubble rendering.
+"""
+
 import json
 import logging
 
-# Get logger instance (configured in config module)
 logger = logging.getLogger('teenyfactories')
 
 
@@ -25,9 +37,7 @@ class PostgresLogHandler(logging.Handler):
         self._cursor = None
         self._factory_name = _config.FACTORY_NAME
         self._service_name = _config.AGENT_NAME
-        # HOSTNAME is injected by Docker itself, not by our orchestrator —
-        # read from os directly.
-        self._container_id = os.getenv('HOSTNAME', '')[:12] if os.getenv('HOSTNAME') else None
+        self._container_id = _config.AGENT_ID or None
         self._suppress = False  # Set True to skip next emit (used by log_persona)
 
     def _get_connection(self):
@@ -56,7 +66,6 @@ class PostgresLogHandler(logging.Handler):
             return None
 
     def _level_name(self, record):
-        """Map Python log levels to our level strings."""
         name = record.levelname.lower()
         if name == 'warning':
             return 'warn'
@@ -76,14 +85,12 @@ class PostgresLogHandler(logging.Handler):
             level = self._level_name(record)
             message = self.format(record) if self.formatter else record.getMessage()
 
-            # INSERT into factory_logs
             cursor.execute(
                 """INSERT INTO factory_logs (factory_name, service_name, container_id, level, message)
                    VALUES (%s, %s, %s, %s, %s)""",
                 (self._factory_name, self._service_name, self._container_id, level, message)
             )
 
-            # NOTIFY for real-time streaming
             notify_payload = json.dumps({
                 'factory_name': self._factory_name,
                 'service_name': self._service_name,
@@ -91,60 +98,47 @@ class PostgresLogHandler(logging.Handler):
                 'level': level,
                 'message': message
             })
-            # Truncate if too large for NOTIFY (8000 byte limit)
             if len(notify_payload) > 7900:
                 notify_payload = notify_payload[:7900]
             cursor.execute('NOTIFY "factory_logs", %s', (notify_payload,))
 
         except Exception:
-            # Never let logging errors crash the agent
+            # Never let logging errors crash the agent.
             pass
 
 
-def log(message, level='debug'):
-    level = level.lower()
-    if level == 'debug':
-        logger.debug(message)
-    elif level == 'info':
-        logger.info(message)
-    elif level in ('warn', 'warning'):
-        logger.warning(message)
-    elif level == 'error':
-        logger.error(message)
-    else:
-        logger.debug(f"[{level.upper()}] {message}")
+def log_debug(message: str):
+    logger.debug(message)
 
 
-def log_debug(message):
-    log(message, level='debug')
+def log_info(message: str):
+    logger.info(message)
 
 
-def log_info(message):
-    log(message, level='info')
+def log_warn(message: str):
+    logger.warning(message)
 
 
-def log_warn(message):
-    log(message, level='warn')
+def log_error(message: str):
+    logger.error(message)
 
 
-def log_error(message):
-    log(message, level='error')
-
-
-def log_persona(message, metadata=None):
+def log_persona(message: str):
     """
-    Log a first-person message for UI speech bubbles.
-    Outputs to stdout as INFO, writes to PostgreSQL as level='persona'.
+    First-person speech-bubble line for the chat UI.
+
+    Stdout: emitted at INFO level.
+    PostgreSQL: written as a separate row with level='persona' so the UI can
+    render it differently from regular log lines.
     """
-    # Suppress the PostgresLogHandler for the stdout emit — we write persona separately
+    # Suppress the PostgresLogHandler for the stdout emit — we write the
+    # persona row separately below.
     for handler in logger.handlers:
         if isinstance(handler, PostgresLogHandler):
             handler._suppress = True
 
-    # Stdout as info
     logger.info(message)
 
-    # Write directly to DB as 'persona' level
     try:
         for handler in logger.handlers:
             if isinstance(handler, PostgresLogHandler):
@@ -153,13 +147,12 @@ def log_persona(message, metadata=None):
                     from .. import config as _config
                     factory = _config.FACTORY_NAME
                     service = _config.AGENT_NAME
-                    container = os.getenv('HOSTNAME', '')[:12] if os.getenv('HOSTNAME') else None
+                    container = _config.AGENT_ID or None
 
                     cursor.execute(
-                        """INSERT INTO factory_logs (factory_name, service_name, container_id, level, message, log_data)
-                           VALUES (%s, %s, %s, %s, %s, %s)""",
-                        (factory, service, container, 'persona', message,
-                         json.dumps(metadata) if metadata else None)
+                        """INSERT INTO factory_logs (factory_name, service_name, container_id, level, message)
+                           VALUES (%s, %s, %s, %s, %s)""",
+                        (factory, service, container, 'persona', message)
                     )
 
                     notify = json.dumps({

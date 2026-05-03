@@ -25,7 +25,7 @@ class PostgresProvider:
     def __init__(self):
         self.connection = None
         self.cursor = None                # Used for reads AND direct writes to factory_data
-        self._factory_name = config.FACTORY_PREFIX
+        self._factory_name = config.FACTORY_NAME
         self._agent_name = config.AGENT_NAME
         self._listening = set()           # set of channel names we've LISTENed on
 
@@ -97,17 +97,26 @@ class PostgresProvider:
             row = self.cursor.fetchone()
             if not row:
                 return None
-            item = {
+            raw = row[4]
+            if raw is None:
+                payload = {}
+            elif isinstance(raw, dict):
+                payload = raw
+            else:
+                try:
+                    payload = json.loads(raw)
+                except Exception:
+                    payload = {}
+            return {
                 'factory_name': row[0],
                 'collection':   row[1],
                 'key':          row[2],
                 'user_id':      row[3],
-                'value':        row[4] if isinstance(row[4], dict) else (json.loads(row[4]) if row[4] else {}),
+                'data':         payload,
                 'state':        row[5],
                 'created_at':   row[6],
                 'updated_at':   row[7],
             }
-            return item
         except Exception as e:
             log_error(f"fetch_item failed: {e}")
             return None

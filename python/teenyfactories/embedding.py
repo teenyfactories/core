@@ -2,20 +2,26 @@
 Embedding API
 
 Provider-agnostic text embedding via tf.embed().
-Supports OpenAI and Ollama. Configured via environment variables:
+Supports OpenAI and Ollama. Defaults come from the environment:
   DEFAULT_EMBEDDING_PROVIDER — 'openai' (default) or 'ollama'
-  DEFAULT_EMBEDDING_MODEL — model name (default: 'text-embedding-3-small')
+  DEFAULT_EMBEDDING_MODEL    — model name (default: 'text-embedding-3-small')
+
+Per-call overrides for both `provider` and `model` are accepted; useful for
+factories that want to mix model sizes (e.g. small for chunks, large for
+queries) without changing the global default.
 
 Usage:
     import teenyfactories as tf
 
-    vector = tf.embed("some text")
+    vector  = tf.embed("some text")
     vectors = tf.embed(["text 1", "text 2", "text 3"])
+    vector  = tf.embed("query", model="text-embedding-3-large")
+    vector  = tf.embed("local", provider="ollama", model="nomic-embed-text")
 """
 
 import time
 import uuid
-from typing import List, Union
+from typing import List, Optional, Union
 
 from . import config
 
@@ -40,18 +46,24 @@ def _log_embed_usage(provider: str, model: str, input_tokens: int,
         pass
 
 
-def embed(text: Union[str, List[str]]) -> Union[List[float], List[List[float]]]:
+def embed(
+    text: Union[str, List[str]],
+    provider: Optional[str] = None,
+    model: Optional[str] = None,
+) -> Union[List[float], List[List[float]]]:
     """Generate embedding vector(s) for text.
 
     Args:
-        text: A single string or list of strings to embed.
+        text:     A single string or list of strings to embed.
+        provider: Override DEFAULT_EMBEDDING_PROVIDER for this call.
+        model:    Override DEFAULT_EMBEDDING_MODEL for this call.
 
     Returns:
-        A single vector (list of floats) if input is a string,
-        or a list of vectors if input is a list of strings.
+        A single vector (list of floats) if input is a string, or a list of
+        vectors if input is a list of strings.
     """
-    provider = config.require_embedding_provider()
-    model = config.require_embedding_model()
+    used_provider = provider or config.require_embedding_provider()
+    used_model = model or config.require_embedding_model()
 
     single = isinstance(text, str)
     texts = [text] if single else text
@@ -59,12 +71,12 @@ def embed(text: Union[str, List[str]]) -> Union[List[float], List[List[float]]]:
     if not texts:
         return [] if not single else []
 
-    if provider == 'openai':
-        vectors = _embed_openai(texts, model)
-    elif provider == 'ollama':
-        vectors = _embed_ollama(texts, model)
+    if used_provider == 'openai':
+        vectors = _embed_openai(texts, used_model)
+    elif used_provider == 'ollama':
+        vectors = _embed_ollama(texts, used_model)
     else:
-        raise ValueError(f"Unknown embedding provider: {provider}")
+        raise ValueError(f"Unknown embedding provider: {used_provider}")
 
     return vectors[0] if single else vectors
 

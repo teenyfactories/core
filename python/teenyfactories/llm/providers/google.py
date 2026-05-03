@@ -8,8 +8,8 @@ from teenyfactories.llm.base import LLMProvider
 class GoogleProvider(LLMProvider):
     """Google Gemini implementation of LLM provider"""
 
-    def get_client(self, model: Optional[str] = None):
-        """Get Google Gemini LLM client. Optional `model` overrides DEFAULT_LLM_MODEL."""
+    def get_client(self, model: Optional[str] = None, temperature: Optional[float] = None):
+        """Get Google Gemini LLM client. Optional overrides for model + temperature."""
         try:
             from langchain_google_genai import ChatGoogleGenerativeAI
         except ImportError:
@@ -18,7 +18,7 @@ class GoogleProvider(LLMProvider):
         return ChatGoogleGenerativeAI(
             google_api_key=config.require_api_key('google'),
             model=model or config.require_llm_model(),
-            temperature=0.3
+            temperature=0.3 if temperature is None else temperature,
         )
 
     def get_model_name(self, model: Optional[str] = None) -> str:

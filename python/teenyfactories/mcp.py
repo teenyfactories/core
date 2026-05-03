@@ -4,10 +4,11 @@ MCP Tool Registration
 Factories expose tools to the orchestrator's LLM chat via dedicated collections
 in factory_data:
 
-- `_mcp_tool_catalog` — one row per agent. key=AGENT_NAME. value={server, tools}
+- `_mcp_tool_catalog` — one row per agent. key=AGENT_NAME, data={server, tools}
   if MCP is configured, else {}. Written once on first `tf.run_pending()`.
 - `_mcp_{toolname}` — one row per call. key=correlation_id.
-  state progresses 'request' -> 'response' on the same row.
+  state progresses 'request' -> 'response' on the same row; the call's
+  params/result/error live in the row's `data` JSONB payload.
 
 Usage:
     import teenyfactories as tf
@@ -100,7 +101,7 @@ def _maybe_publish_mcp():
         return
     _mcp_published = True
 
-    from .store import store
+    from .collection import collection
     from .message_queue import on_state
 
     agent_name = _agent_name()
@@ -118,10 +119,8 @@ def _maybe_publish_mcp():
         catalog_value = {}
 
     try:
-        store('_mcp_tool_catalog').set(
-            key=agent_name,
-            value=catalog_value,
-            state='registered',
+        collection('_mcp_tool_catalog').set(
+            agent_name, state='registered', data=catalog_value,
         )
     except Exception as e:
         log_error(f"Failed to write MCP catalog row: {e}")
@@ -148,49 +147,39 @@ def _maybe_publish_mcp():
 
 def _make_tool_state_handler(tool_name: str):
     """Build a handler closure for this tool's 'request' state transition."""
-    from .store import store
+    from .collection import collection
 
     def handler(item):
-        value = item.get('value') or {}
+        data = item.get('data') or {}
         key = item['key']
 
         # Agent routing — silently skip if this request was targeted elsewhere
-        target_agent = value.get('agent')
+        target_agent = data.get('agent')
         our_agent = _agent_name()
         if target_agent and target_agent != our_agent:
             return
 
+        coll = collection(f"_mcp_{tool_name}")
         fn = _mcp_handlers.get(tool_name)
         if not fn:
             # Shouldn't happen given subscription only occurs for registered tools,
             # but we might still receive replay for a tool we no longer expose.
             log_error(f"No handler registered for MCP tool: {tool_name}")
-            store(f"_mcp_{tool_name}").set(
-                key=key,
-                value={**value, 'error': f'No handler for tool {tool_name}'},
-                state='response',
-            )
+            coll.set(key, state='response',
+                     data={**data, 'error': f'No handler for tool {tool_name}'})
             return
 
-        params = value.get('params', {})
+        params = data.get('params', {})
         log_debug(f"Executing MCP tool: {tool_name} (correlation_id={key})")
 
         try:
             result = fn(params)
             if not isinstance(result, (dict, list, str, int, float, bool, type(None))):
                 result = str(result)
-            store(f"_mcp_{tool_name}").set(
-                key=key,
-                value={**value, 'result': result},
-                state='response',
-            )
+            coll.set(key, state='response', data={**data, 'result': result})
             log_info(f"MCP tool {tool_name} completed (correlation_id={key})")
         except Exception as e:
             log_error(f"MCP tool {tool_name} failed: {e}")
-            store(f"_mcp_{tool_name}").set(
-                key=key,
-                value={**value, 'error': str(e)},
-                state='response',
-            )
+            coll.set(key, state='response', data={**data, 'error': str(e)})
 
     return handler

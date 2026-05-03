@@ -55,44 +55,40 @@ def require(name: str, hint: str | None = None) -> str:
     return val
 
 
-# ── Project-level identifiers (set per-container by the orchestrator) ───────
-
-# Display label for log lines / usage reports. Not container-injected;
-# safe to default.
-PROJECT_NAME = get("PROJECT_NAME", "TeenyFactories")
+# ── Per-container identifiers (set by the orchestrator) ─────────────────────
 
 # Set by orchestrator/backend/services/containerManager.js when spawning
-# each agent container. Always set in normal operation; the empty-string
-# fallback only fires in dev runs outside the orchestrator.
-FACTORY_PREFIX = get("FACTORY_PREFIX", "")
+# each agent container. FACTORY_NAME doubles as the NOTIFY channel prefix
+# ({factory_name}.{collection}.{state}). The 'unknown' fallback only fires
+# in dev runs outside the orchestrator.
 FACTORY_NAME = get("FACTORY_NAME", "unknown")
 AGENT_NAME = get("AGENT_NAME", "unknown")
 
+# AGENT_ID = the full container hostname. Docker daemon sets HOSTNAME to the
+# container ID at create; Kubernetes sets it to the pod name. Stored on
+# factory_logs.container_id as the per-instance identifier so multiple
+# replicas of the same AGENT_NAME stay distinguishable. Empty string when
+# running outside a container (dev runs).
+AGENT_ID = get("HOSTNAME", "")
+
 
 # ── Logging ────────────────────────────────────────────────────────────────
-
-DEBUG_LEVEL = (get("DEBUG_LEVEL", "INFO") or "INFO").upper()
-_LEVEL_MAP = {
-    "DEBUG": logging.DEBUG,
-    "INFO": logging.INFO,
-    "WARN": logging.WARNING,
-    "WARNING": logging.WARNING,
-    "ERROR": logging.ERROR,
-}
-LOG_LEVEL = _LEVEL_MAP.get(DEBUG_LEVEL, logging.INFO)
+#
+# No threshold knob. Every tf.log_* call emits — to stdout AND, when a
+# Postgres host is injected, to the factory_logs table. UI-side filtering
+# (NodeLogsPanel) is the place to hide noisy levels at view-time.
 
 logging.basicConfig(
-    level=LOG_LEVEL,
+    level=logging.DEBUG,
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
-# Attach Postgres log handler if a host was injected.
 if get("POSTGRES_HOST"):
     try:
         from .logging.logger import PostgresLogHandler  # noqa: WPS433 — local import to break cycle
 
         _pg_handler = PostgresLogHandler()
-        _pg_handler.setLevel(LOG_LEVEL)
+        _pg_handler.setLevel(logging.DEBUG)
         logging.getLogger("teenyfactories").addHandler(_pg_handler)
     except Exception:
         # Don't block agent startup if the handler can't initialise — the

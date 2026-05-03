@@ -31,8 +31,9 @@ class AzureBedrockProvider(LLMProvider):
         query_params = urllib.parse.parse_qs(parsed.query)
         self.azure_api_version = query_params.get('api-version', ['2025-01-01-preview'])[0]
 
-    def get_client(self, model: Optional[str] = None):
-        """Get Azure Bedrock LLM client. Optional `model` overrides the deployment name."""
+    def get_client(self, model: Optional[str] = None, temperature: Optional[float] = None):
+        """Get Azure Bedrock LLM client. Optional overrides for model + temperature.
+        o3 models silently ignore the temperature override (the SDK rejects it)."""
         try:
             from langchain_openai import AzureChatOpenAI
         except ImportError:
@@ -100,7 +101,7 @@ class AzureBedrockProvider(LLMProvider):
             return O3AzureWrapper(raw_client, deployment)
         else:
             # Other models support temperature
-            client_kwargs['temperature'] = 0.3
+            client_kwargs['temperature'] = 0.3 if temperature is None else temperature
             return AzureChatOpenAI(**client_kwargs)
 
     def get_model_name(self, model: Optional[str] = None) -> str:

@@ -1,700 +1,274 @@
 # TeenyFactories
 
-**Multi-provider LLM and message queue abstraction for distributed agent systems**
+**Python framework for distributed agent systems backed by Postgres.**
 
-TeenyFactories is a Python package that provides a unified interface for building distributed agent systems with support for multiple LLM providers and message queue backends.
+`teenyfactories` (imported as `tf`) is the framework that every TeenyFactories agent runs on top of. It gives you:
 
-## Features
+- A multi-provider LLM call (`tf.call_llm`) with automatic Pydantic parsing and per-call usage logging.
+- A Postgres-backed pub/sub primitive (`tf.on_state`, `tf.on_message`, `tf.send_message`) over LISTEN/NOTIFY.
+- A typed key-value-and-state store (`tf.collection`) that drives the lifecycle.
+- Vector embeddings + ANN search (`tf.embed`, `tf.collection(...).vector_search(...)`).
+- MCP tool registration so factory agents can expose tools to the orchestrator's chat LLM.
+- Scheduling, structured logging, timestamps, IDs, and a single-call event loop (`tf.run_pending`).
 
-- 🤖 **Multi-Provider LLM Support**: OpenAI, Anthropic, Google Gemini, Ollama, Azure Bedrock (including O3 models)
-- 📬 **Pluggable Message Queues**: Redis pub/sub, PostgreSQL LISTEN/NOTIFY
-- 📝 **Standardized Logging**: Unified logging interface with configurable levels
-- ⏰ **Task Scheduling**: Built-in support for recurring tasks
-- 🔄 **Event-Driven Architecture**: Pub/sub messaging with automatic prefixing and metadata
-- 🔒 **Distributed Coordination**: Processing locks, ready states, and service status tracking
+Everything routes through `factory_data` in Postgres; there is no Redis, no message broker, no separate state file.
 
 ## Installation
 
-### Basic Installation
+For local development inside the TeenyFactories monorepo:
 
 ```bash
-pip install teenyfactories
+cd core
+pip install -e "python/[dev]"
 ```
 
-### With Specific Providers
-
-```bash
-# OpenAI only
-pip install teenyfactories[openai,redis]
-
-# Anthropic + PostgreSQL
-pip install teenyfactories[anthropic,postgres]
-
-# All LLM providers + Redis
-pip install teenyfactories[all-llm,redis]
-
-# Everything
-pip install teenyfactories[all]
-```
+Inside containers, the framework is pre-installed in the base image `ghcr.io/teenyfactories/agent:dev` (built from `core/python/Dockerfile.build`). Agent scripts mount at `/app/script.py` and `import teenyfactories as tf` works out of the box — no `sys.path` mangling.
 
 ## Quick Start
 
-### LLM Usage
-
 ```python
 import teenyfactories as tf
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from langchain_core.prompts import PromptTemplate
 
-# Define response model
-class AnalysisResult(BaseModel):
-    summary: str
-    sentiment: str
-    score: float
 
-# Create prompt
-template = PromptTemplate.from_template(
-    "Analyze the following text: {text}\n{format_instructions}"
-)
+class Insight(BaseModel):
+    summary: str = Field(description="One-sentence summary")
+    score: float = Field(description="Confidence 0..1")
 
-# Call LLM with automatic validation
-result = tf.call_llm(
-    template,
-    {"text": "This is amazing!"},
-    response_model=AnalysisResult
-)
 
-print(result.summary)
-print(result.sentiment)
-print(result.score)
-```
+# React when a row in `documents` enters state 'loaded'.
+@tf.on_state('documents', 'loaded').do
+def analyse(item):
+    tf.log_info(f"Analysing {item['key']}")
 
-### Message Queue Usage
-
-```python
-import teenyfactories as tf
-
-# Send a message
-tf.send_message('data_ready', {
-    'dataset_id': '123',
-    'status': 'completed'
-})
-
-# Subscribe to messages
-def handle_message(message):
-    print(f"Received: {message['data']}")
-
-tf.subscribe_to_message(handle_message, topics=['data_ready', 'task_complete'])
-
-# Schedule recurring tasks
-def health_check():
-    tf.log("Health check running", level='info')
-
-tf.schedule_task(health_check, interval_seconds=60)
-
-# Main event loop
-tf.wait_for_next_message_or_scheduled_task()
-```
-
-### Distributed Coordination
-
-```python
-import teenyfactories as tf
-
-# Mark agent as ready
-tf.set_agent_ready('data_profiler')
-
-# Check if another agent is ready
-if tf.is_agent_ready('script_executor'):
-    print("Script executor is ready!")
-
-# Acquire processing lock
-if tf.acquire_processing_lock('data_profiler', event_id):
-    try:
-        # Process the event
-        process_data()
-    finally:
-        tf.release_processing_lock('data_profiler', event_id)
-
-# Publish service status
-tf.publish_service_status('data_profiler', 'running', {'progress': 0.5})
-```
-
-## Integrating into Your Factory
-
-This section explains how to integrate TeenyFactories into your own factory projects, whether you're building from scratch or migrating existing code.
-
-### Development Setup (Docker Volume Mount)
-
-For development with hot-reloading, mount the TeenyFactories package from your local clone:
-
-**Prerequisites**:
-```bash
-# Clone the TeenyFactories core framework
-git clone https://github.com/YOUR_ORG/teenyfactories.git
-# Note: Can be cloned anywhere on your system
-```
-
-**docker-compose.yml**:
-```yaml
-services:
-  your_agent:
-    build:
-      context: .
-      dockerfile: agents/your_agent.dockerfile
-    volumes:
-      # Mount core package (read-only) - adjust path to your clone location
-      - /path/to/teenyfactories/teenyfactories:/app/teenyfactories:ro
-      # If cloned side-by-side: ../teenyfactories/teenyfactories:/app/teenyfactories:ro
-
-      # Mount your factory code
-      - ./agents:/app/agents
-      - ./common:/app/common
-    environment:
-      - DEFAULT_LLM_PROVIDER=openai
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - MESSAGE_QUEUE_PROVIDER=redis
-      - REDIS_HOST=redis
-      - FACTORY_PREFIX=your_factory
-    depends_on:
-      - redis
-```
-
-**Dockerfile** (agents/your_agent.dockerfile):
-```dockerfile
-FROM python:3.11-slim
-
-WORKDIR /app
-
-# Copy requirements (if using external dependencies)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Note: teenyfactories mounted as volume, not copied
-# Your agent code also mounted as volume
-
-CMD ["python", "-u", "agents/your_agent.py"]
-```
-
-**Agent/Worker Code**:
-```python
-#!/usr/bin/env python
-import sys
-sys.path.append('/app')  # Ensure /app is in path
-
-import teenyfactories as tf  # Import mounted package
-
-# Your agent logic here
-tf.log("Agent starting", level='info')
-```
-
-### Production Setup (pip install)
-
-For production deployments, install teenyfactories as a package:
-
-**requirements.txt**:
-```
-teenyfactories[openai,redis]>=1.0.0
-# or for all providers:
-# teenyfactories[all]>=1.0.0
-```
-
-**Dockerfile**:
-```dockerfile
-FROM python:3.11-slim
-
-WORKDIR /app
-
-# Install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy factory code
-COPY agents/ ./agents/
-COPY common/ ./common/
-
-CMD ["python", "-u", "agents/your_agent.py"]
-```
-
-**Agent Code** (same as development):
-```python
-import teenyfactories as tf
-```
-
-### Message Queue Configuration
-
-TeenyFactories supports both Redis and PostgreSQL message queues. Choose based on your infrastructure:
-
-#### Redis (Recommended for Most Cases)
-
-**docker-compose.yml**:
-```yaml
-services:
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
-  your_agent:
-    environment:
-      - MESSAGE_QUEUE_PROVIDER=redis
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_DB=0
-      - FACTORY_PREFIX=your_factory
-    depends_on:
-      redis:
-        condition: service_healthy
-```
-
-**Best for**: Fast pub/sub, low latency, simple deployments
-
-#### PostgreSQL (For Database-Heavy Factories)
-
-**docker-compose.yml**:
-```yaml
-services:
-  postgres:
-    image: postgres:15-alpine
-    environment:
-      POSTGRES_DB: teenyfactories
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
-
-  your_agent:
-    environment:
-      - MESSAGE_QUEUE_PROVIDER=postgres
-      - POSTGRES_HOST=postgres
-      - POSTGRES_PORT=5432
-      - POSTGRES_DB=teenyfactories
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - FACTORY_PREFIX=your_factory
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-volumes:
-  postgres_data:
-```
-
-**Best for**: Factories already using PostgreSQL, transactional guarantees
-
-### LLM Provider Configuration
-
-Configure your preferred LLM provider via environment variables:
-
-**OpenAI** (GPT-4, GPT-4o):
-```yaml
-environment:
-  - DEFAULT_LLM_PROVIDER=openai
-  - OPENAI_API_KEY=${OPENAI_API_KEY}
-  - OPENAI_MODEL=gpt-4o-mini  # or gpt-4, gpt-4o
-```
-
-**Anthropic** (Claude):
-```yaml
-environment:
-  - DEFAULT_LLM_PROVIDER=anthropic
-  - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-  - ANTHROPIC_MODEL=claude-3-sonnet-20240229
-```
-
-**Google Gemini**:
-```yaml
-environment:
-  - DEFAULT_LLM_PROVIDER=google
-  - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-  - GOOGLE_MODEL=gemini-pro
-```
-
-**Ollama** (Local Models):
-```yaml
-environment:
-  - DEFAULT_LLM_PROVIDER=ollama
-  - OLLAMA_MODEL=gpt-oss:20b
-  - OLLAMA_BASE_URL=http://ollama:11434  # Or external URL
-```
-
-### Example Factory Structure
-
-A typical factory using TeenyFactories follows this structure:
-
-```
-your_factory/
-├── agents/                        # AI-powered agents
-│   ├── agent_analyzer.py          # Data analysis agent
-│   ├── agent_planner.py           # Planning agent
-│   └── agent_coder.py             # Code generation agent
-├── workers/                       # Execution workers
-│   ├── worker_input_reader.py     # Input processing
-│   ├── worker_executor.py         # Script execution
-│   └── worker_output_writer.py    # Output handling
-├── common/                        # Shared utilities
-│   ├── factory_schemas.py         # Pydantic models
-│   └── helpers.py                 # Factory-specific helpers
-├── dockervolumes/                 # Persistent data
-│   ├── inputs/                    # Input files
-│   ├── outputs/                   # Output files
-│   └── tracking/                  # State tracking
-├── docker-compose.yml             # Service orchestration
-├── requirements.txt               # Python dependencies
-├── factory.yml                    # Factory metadata
-└── README.md                      # Documentation
-```
-
-### Example Agent Implementation
-
-**agents/agent_analyzer.py**:
-```python
-#!/usr/bin/env python
-"""
-Data Analyzer Agent - Analyzes incoming data and publishes insights
-"""
-import sys
-sys.path.append('/app')
-
-import teenyfactories as tf
-from pydantic import BaseModel
-from langchain_core.prompts import PromptTemplate
-
-class DataInsight(BaseModel):
-    summary: str
-    key_findings: list[str]
-    confidence_score: float
-
-def analyze_data(message):
-    """Handle data analysis requests"""
-    data = message.get('data', {})
-
-    tf.log(f"Analyzing data: {data.get('dataset_id')}", level='info')
-
-    # Call LLM with structured output
     prompt = PromptTemplate.from_template(
-        "Analyze this dataset: {dataset}\n{format_instructions}"
+        "Summarise: {text}\n{format_instructions}"
     )
-
     result = tf.call_llm(
         prompt,
-        {"dataset": data.get('content')},
-        response_model=DataInsight
+        {"text": item['data']['content']},
+        response_model=Insight,
     )
 
-    # Publish insights
-    tf.send_message('analysis_complete', {
-        'dataset_id': data.get('dataset_id'),
-        'insights': result.model_dump()
-    })
-
-    tf.log(f"Analysis complete: {result.summary}", level='info')
-
-def main():
-    tf.log("Starting data analyzer agent", level='info')
-
-    # Subscribe to events
-    tf.subscribe_to_message(
-        analyze_data,
-        topics=['data_received']
+    # Persist the analysis as a new row, and advance the source row.
+    tf.collection('insights').add(
+        state='ready',
+        data={'document_key': item['key'], **result.model_dump()},
     )
+    tf.collection('documents').set(item['key'], state='analysed')
 
-    # Mark as ready
-    tf.set_agent_ready('data_analyzer')
 
-    # Main event loop
-    tf.wait_for_next_message_or_scheduled_task()
+tf.log_info("analyser starting")
 
-if __name__ == "__main__":
-    main()
+while True:
+    tf.run_pending()
+    tf.sleep(1)
 ```
 
-### Example Worker Implementation
+## Public API at a glance
 
-**workers/worker_input_reader.py**:
+| Group | Names |
+|---|---|
+| Logging | `log_debug`, `log_info`, `log_warn`, `log_error`, `log_persona` |
+| Time / IDs | `get_timestamp`, `get_timestamp_utc`, `generate_unique_id` |
+| LLM | `call_llm` |
+| Pub/sub | `send_message`, `on_message`, `on_state`, `run_pending` |
+| MCP | `add_mcp_server`, `add_mcp_tool` |
+| Data | `collection`, `embed` |
+| Scheduling | `on_schedule`, `sleep` |
+| Config | `PROJECT_NAME`, `FACTORY_PREFIX` |
+| Versioning | `__version__` |
+
+If a symbol is not in this list, it is not part of the supported surface — don't reach into submodules.
+
+## Pub/sub
+
+All factory data lives in `factory_data`. Every row carries a `state` column; INSERTs and state-changing UPDATEs fire `NOTIFY {factory}.{collection}.{state}`.
+
 ```python
-#!/usr/bin/env python
-"""
-Input Reader Worker - Monitors input directory and publishes events
-"""
-import sys
-sys.path.append('/app')
+# Subscribe to lifecycle (primary primitive)
+@tf.on_state('documents', 'loaded').do
+def handle(item):
+    ...
 
-import teenyfactories as tf
-from pathlib import Path
+# Subscribe to a fire-and-forget topic (sugar over on_state('_messages', 'topic'))
+@tf.on_message('rebuild_index').do
+def rebuild(item):
+    ...
 
-INPUTS_DIR = Path('/app/dockervolumes/inputs')
-SCAN_INTERVAL = 30  # seconds
-
-def scan_inputs():
-    """Scan input directory for new files"""
-    tf.log("Scanning inputs directory...", level='info')
-
-    if not INPUTS_DIR.exists():
-        tf.log("Inputs directory not found", level='warn')
-        return
-
-    files = list(INPUTS_DIR.glob('*.csv'))
-
-    if files:
-        tf.log(f"Found {len(files)} input files", level='info')
-
-        # Publish event for each file
-        for file_path in files:
-            tf.send_message('data_received', {
-                'dataset_id': file_path.stem,
-                'file_path': str(file_path),
-                'content': file_path.read_text()[:1000]  # Sample
-            })
-
-def main():
-    tf.log("Starting input reader worker", level='info')
-
-    # Schedule recurring scan
-    tf.schedule_task(scan_inputs, interval_seconds=SCAN_INTERVAL)
-
-    # Initial scan
-    scan_inputs()
-
-    # Publish status
-    tf.send_message('service_status', {
-        'service_name': 'input_reader',
-        'status': 'running',
-        'scan_interval': SCAN_INTERVAL
-    })
-
-    # Main event loop
-    tf.wait_for_next_message_or_scheduled_task()
-
-if __name__ == "__main__":
-    main()
+# Emit a fire-and-forget message
+tf.send_message('rebuild_index').with_data({'reason': 'manual'})
 ```
 
-### Common Integration Patterns
+Handlers always receive the full row dict:
 
-**Pattern 1: Event-Driven Pipeline**
 ```python
-# Agent 1: Publishes 'step_1_complete'
-tf.send_message('step_1_complete', {'data': result})
-
-# Agent 2: Subscribes to 'step_1_complete', publishes 'step_2_complete'
-tf.subscribe_to_message(handle_step_1, topics=['step_1_complete'])
-tf.send_message('step_2_complete', {'data': result})
+{
+    'factory_name': 'my_factory',
+    'collection':   'documents',
+    'key':          'abc123',
+    'user_id':      'system',
+    'data':         {...},        # JSONB payload (DB column is `value`, surfaced as `data`)
+    'state':        'loaded',
+    'created_at':   datetime(...),
+    'updated_at':   datetime(...),
+}
 ```
 
-**Pattern 2: Scheduled Tasks**
+### Replay semantics
+
+By default, `on_state` listens for new NOTIFY events only — it does NOT replay rows already sitting in `(collection, state)` at startup. Opt in when you need durable resume-on-restart:
+
 ```python
-# Run every 60 seconds
-tf.schedule_task(periodic_health_check, interval_seconds=60)
-tf.wait_for_next_message_or_scheduled_task()
+tf.on_state('documents', 'loaded').on_startup_replay_latest().do(handle)
+
+# Replay only the most recent row at startup (e.g. for "current config" patterns):
+tf.on_state('config', 'current') \
+    .on_startup_replay_latest() \
+    .process_latest_only() \
+    .do(reload_config)
 ```
 
-**Pattern 3: Distributed Coordination**
+## Data collections
+
+`tf.collection(name)` is the only way to read or write `factory_data`. Every method returns a key, a row dict, a list of row dicts, an int, or a bool — never a tuple, never a raw cursor.
+
 ```python
-# Wait for dependencies
-if not tf.is_agent_ready('data_profiler'):
-    tf.log("Waiting for data profiler...", level='info')
-    return
+# UPSERT (state-only, data-only, or both)
+tf.collection('documents').set('doc-1', state='loaded', data={'title': 't'})
+tf.collection('documents').set('doc-1', state='chunked')          # state-only transition
+tf.collection('documents').set('doc-1', data={'title': 'new'})    # data-only
 
-# Acquire lock for processing
-if tf.acquire_processing_lock('my_agent', event_id):
-    try:
-        process_event(event_id)
-    finally:
-        tf.release_processing_lock('my_agent', event_id)
+# INSERT new (auto-UUID key); state required
+new_key = tf.collection('chunks').add(state='new', data={'text': '...'})
+
+# Reads
+row     = tf.collection('documents').get('doc-1')             # dict | None
+loaded  = tf.collection('documents').get_all(state='loaded')  # list[dict]
+n       = tf.collection('documents').count(state='loaded')    # int
+exists  = tf.collection('documents').exists('doc-1')          # bool
+
+# Delete one (cascades to factory_vectors). No bulk-delete by design.
+tf.collection('chunks').remove('chunk-xyz')
+
+# Vector search — pass a string (auto-embedded) or a vector
+hits = tf.collection('chunks').vector_search('budget overrun', limit=5)
+hits = tf.collection('chunks').vector_search(query_vec, limit=5, state='ready')
 ```
 
-### Migration from Existing Systems
+`get_all` returns rows ordered by `updated_at` descending. Vector search adds an extra `similarity` key (cosine, 0..1).
 
-If migrating from existing code:
+### Embeddings
 
-1. **Replace custom pub/sub** with `tf.send_message()` and `tf.subscribe_to_message()`
-2. **Replace LLM calls** with `tf.call_llm()` for automatic validation
-3. **Replace logging** with `tf.log()` for consistent format
-4. **Add message queue** provider configuration (Redis or PostgreSQL)
-5. **Update environment variables** to match TeenyFactories conventions
-6. **Test with volume mounts** before production pip install
+```python
+vector = tf.embed("text to embed")
+vectors = tf.embed(["batch", "of", "texts"])
 
-### Troubleshooting Integration
+tf.collection('chunks').set(
+    'chunk-1',
+    state='ready',
+    data={'text': '...'},
+    embedding=vector,    # routed to factory_vectors / dim column
+)
+```
 
-**Import Error**: `ModuleNotFoundError: No module named 'teenyfactories'`
-- Check volume mount path in docker-compose.yml
-- Verify `sys.path.append('/app')` in agent code
-- Ensure package installed if using pip
+Supported dims: 256, 512, 768, 1024, 1536, 3072. Provider via `DEFAULT_EMBEDDING_PROVIDER` / `DEFAULT_EMBEDDING_MODEL`.
 
-**Message Queue Connection Failed**:
-- Verify Redis/PostgreSQL service is healthy
-- Check `MESSAGE_QUEUE_PROVIDER` environment variable
-- Verify connection parameters (host, port, credentials)
-- Check `FACTORY_PREFIX` is set and unique
+## LLM calls
 
-**LLM Provider Error**:
-- Verify API key is set correctly
-- Check `DEFAULT_LLM_PROVIDER` matches available providers
-- Ensure model name is valid for the provider
-- Check API key has sufficient credits/permissions
+```python
+from pydantic import BaseModel, Field
+from langchain_core.prompts import PromptTemplate
 
-## Configuration
+class Result(BaseModel):
+    answer: str = Field(description="The answer")
+    score: float = Field(description="Confidence 0..1")
 
-Configure via environment variables:
+prompt = PromptTemplate.from_template("Q: {q}\n{format_instructions}")
 
-### LLM Configuration
+result = tf.call_llm(
+    prompt,
+    {"q": "what is the meaning of life?"},
+    response_model=Result,
+    temperature=0.3,                              # optional
+    model='claude-haiku-4-5-20251001',            # optional per-call override
+    model_provider='anthropic',                   # optional per-call override
+)
+```
+
+Every call is automatically logged to `factory_logs` (provider, model, latency, tokens, prompt preview). Failures of the logging path never break the underlying call.
+
+## Scheduling
+
+```python
+tf.on_schedule.every(10).minutes.do(periodic_job)
+tf.on_schedule.every().hour.do(periodic_job)
+tf.on_schedule.every().day.at("10:30").do(periodic_job)
+tf.on_schedule.every().monday.do(periodic_job)
+```
+
+## Logging
+
+All five loggers share the same signature `(message: str)` — no `level=`, no `metadata=`.
+
+```python
+tf.log_debug("…")
+tf.log_info("…")
+tf.log_warn("…")
+tf.log_error("…")
+tf.log_persona("first-person line for the chat UI bubbles")
+```
+
+## Time
+
+```python
+tf.get_timestamp()      # local-time ISO-8601 honouring $TZ (defaults UTC); always tz-aware
+tf.get_timestamp_utc()  # UTC ISO-8601; always tz-aware
+```
+
+The orchestrator forwards `TZ` to every agent container so timestamps match the deployment locale without per-factory config.
+
+## Main loop
+
+Every agent script ends with:
+
+```python
+while True:
+    tf.run_pending()
+    tf.sleep(1)
+```
+
+`tf.run_pending()` takes no arguments. The first call also bootstraps the lifecycle (opens the LISTEN connection, publishes the MCP catalog).
+
+## Error handling
+
+- Reads return `None` / `[]` only for genuine "not found" — never to hide a DB error. Failures raise.
+- Writes return the row key. Failures raise. No booleans.
+- Inside handlers, catch known/expected conditions and transition the row to a terminal state; let unexpected exceptions propagate so `run_pending`'s per-handler catch records them.
+
+## Environment
+
+| Variable | Purpose |
+|---|---|
+| `FACTORY_PREFIX` | Factory name; injected by the orchestrator. Used in NOTIFY channel prefix. |
+| `AGENT_NAME` | Agent display name. |
+| `TZ` | POSIX timezone for `tf.get_timestamp()`. Defaults to UTC. |
+| `DEFAULT_LLM_PROVIDER` | `openai`, `anthropic`, `google`, `ollama`, `azure_bedrock` |
+| `DEFAULT_LLM_MODEL` | Model name. Overridable per-call via `tf.call_llm(..., model='...')`. |
+| `DEFAULT_EMBEDDING_PROVIDER` | `openai`, `ollama` |
+| `DEFAULT_EMBEDDING_MODEL` | e.g. `text-embedding-3-small` |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY` | Provider keys |
+
+Postgres connection env vars are internal and read directly inside the core; agent code does not touch them.
+
+## Tests
 
 ```bash
-# Provider selection
-DEFAULT_LLM_PROVIDER=openai  # openai, anthropic, google, ollama, azure_bedrock
-
-# OpenAI
-OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o-mini
-
-# Anthropic
-ANTHROPIC_API_KEY=sk-ant-...
-ANTHROPIC_MODEL=claude-3-sonnet-20240229
-
-# Google Gemini
-GOOGLE_API_KEY=...
-GOOGLE_MODEL=gemini-pro
-
-# Ollama
-OLLAMA_MODEL=gpt-oss:20b
-OLLAMA_BASE_URL=http://localhost:11434
-
-# Azure Bedrock
-AZURE_BEDROCK_LLM_URL=https://...
-AZURE_BEDROCK_LLM_KEY=...
-```
-
-### Message Queue Configuration
-
-```bash
-# Provider selection
-MESSAGE_QUEUE_PROVIDER=redis  # redis or postgres
-
-# Redis
-REDIS_HOST=redis
-REDIS_PORT=6379
-REDIS_DB=0
-
-# PostgreSQL
-POSTGRES_HOST=postgres
-POSTGRES_PORT=5432
-POSTGRES_DB=teenyfactories
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgres
-
-# Factory prefix (for multi-tenancy)
-FACTORY_PREFIX=my_factory
-```
-
-### Logging Configuration
-
-```bash
-DEBUG_LEVEL=INFO  # DEBUG, INFO, WARN, ERROR
-```
-
-## Architecture
-
-TeenyFactories uses a provider pattern for both LLM and message queue backends:
-
-### LLM Providers
-
-- **OpenAI**: GPT-4, GPT-4o, GPT-3.5-turbo
-- **Anthropic**: Claude 3 models (Opus, Sonnet, Haiku)
-- **Google**: Gemini Pro and variants
-- **Ollama**: Local models via Ollama server
-- **Azure Bedrock**: Azure OpenAI including O3 models
-
-### Message Queue Providers
-
-- **Redis**: Fast pub/sub with key-value storage
-- **PostgreSQL**: LISTEN/NOTIFY with database-backed key-value storage
-
-## API Reference
-
-### Logging
-
-- `log(message, level='debug')` - Log message at specified level
-- `log_debug(message)` - Log debug message
-- `log_info(message)` - Log info message
-- `log_warn(message)` - Log warning message
-- `log_error(message)` - Log error message
-
-### LLM
-
-- `get_llm_client(provider=None)` - Get LLM client for provider
-- `call_llm(prompt, inputs, response_model, provider=None)` - Call LLM with validation
-- `clean_json_response(text)` - Clean JSON from LLM response
-
-### Message Queue
-
-- `send_message(topic, payload)` - Send message to topic
-- `subscribe_to_message(callback, topics)` - Subscribe to topics
-- `schedule_task(func, interval_seconds)` - Schedule recurring task
-- `wait_for_next_message_or_scheduled_task()` - Main event loop
-
-### Coordination
-
-- `publish_service_status(name, status, details)` - Publish service status
-- `set_agent_ready(name)` - Mark agent as ready
-- `is_agent_ready(name)` - Check if agent is ready
-- `acquire_processing_lock(agent, event_id, timeout)` - Acquire lock
-- `release_processing_lock(agent, event_id)` - Release lock
-
-### Utilities
-
-- `get_aest_now()` - Get current AEST datetime
-- `get_timestamp()` - Get ISO format timestamp
-- `generate_unique_id()` - Generate UUID
-- `AEST_TIMEZONE` - AEST timezone constant
-
-## Development
-
-### Local Development
-
-For developing TeenyFactories core itself, mount the package source:
-
-```yaml
-# docker-compose.yml (in your factory repository)
-services:
-  agent:
-    volumes:
-      # Path to your teenyfactories clone
-      - /path/to/teenyfactories/teenyfactories:/app/teenyfactories:ro
-      # If cloned side-by-side with factory: ../teenyfactories/teenyfactories:/app/teenyfactories:ro
-```
-
-Then import as usual:
-
-```python
-import teenyfactories as tf
-```
-
-### Testing
-
-```bash
-# Install with dev dependencies
-pip install -e ".[dev]"
-
-# Run tests
+pip install -e "python/[dev]"
 pytest
-
-# Run with coverage
-pytest --cov=teenyfactories
 ```
 
 ## License
 
-MIT License - see LICENSE file for details
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
+MIT — see `LICENSE`.
