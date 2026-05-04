@@ -291,9 +291,25 @@ def run_pending():
         # Re-entrant or post-init registrations — flush before dispatch.
         _flush_registrations()
 
-    _schedule.run_pending()
-    _replay_pending_subscriptions()
-    _drain_notifications()
+    # Catch-all: any unhandled exception from a scheduled job, replay handler,
+    # or NOTIFY dispatcher must NOT kill the agent's main loop. Log to
+    # factory_logs so the operator sees the failure, then continue. Pubsub
+    # paths already wrap each handler individually; this is the outer net for
+    # everything else (notably scheduled-job exceptions, which the upstream
+    # `schedule` library propagates by default).
+    import traceback as _tb
+    try:
+        _schedule.run_pending()
+    except Exception as e:
+        log_error(f"Scheduled job raised: {e}\n{_tb.format_exc()}")
+    try:
+        _replay_pending_subscriptions()
+    except Exception as e:
+        log_error(f"Subscription replay raised: {e}\n{_tb.format_exc()}")
+    try:
+        _drain_notifications()
+    except Exception as e:
+        log_error(f"NOTIFY dispatch raised: {e}\n{_tb.format_exc()}")
 
 
 def _replay_pending_subscriptions():
