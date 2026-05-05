@@ -37,6 +37,9 @@ from .utils import get_timestamp, get_timestamp_utc, generate_unique_id
 # LLM
 from .llm import call_llm
 
+# Secrets — pull from orchestrator's in-built secrets store with env-var fallback.
+from .secrets import secrets
+
 # Message Queue
 from .message_queue import send_message, on_message, on_state, run_pending
 
@@ -70,6 +73,9 @@ __all__ = [
 
     # LLM
     'call_llm',
+
+    # Secrets
+    'secrets',
 
     # Message Queue
     'send_message', 'on_message', 'on_state', 'run_pending',

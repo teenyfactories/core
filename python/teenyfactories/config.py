@@ -133,8 +133,11 @@ def require_embedding_model() -> str:
 
 
 def require_api_key(provider: str) -> str:
-    """Resolve the API key (or base URL) for a given provider. Raises with
-    a clear message instead of letting None propagate to the SDK."""
+    """Resolve the API key (or base URL) for a given provider. Tries the
+    in-built secrets store first (tf.secrets) — that itself falls back to
+    env vars when the secrets feature is off — and only raises if no value
+    is found anywhere. The same key name (e.g. ANTHROPIC_API_KEY) is used
+    in both stores; no rename map needed."""
     var_name = {
         "openai": "OPENAI_API_KEY",
         "anthropic": "ANTHROPIC_API_KEY",
@@ -144,6 +147,12 @@ def require_api_key(provider: str) -> str:
     }.get(provider)
     if not var_name:
         raise RuntimeError(f"Unknown LLM provider '{provider}'")
+    # Local import to avoid a circular import at module load (secrets.py
+    # imports FACTORY_NAME from config).
+    from teenyfactories.secrets import secrets as _secrets
+    val = _secrets(var_name)
+    if val:
+        return val
     return require(var_name, f"required by DEFAULT_LLM_PROVIDER='{provider}'")
 
 
