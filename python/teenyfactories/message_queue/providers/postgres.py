@@ -175,6 +175,71 @@ class PostgresProvider:
             log_error(f"fetch_rows_since failed for {collection}.{state}: {e}")
             return []
 
+    def fetch_due_rows(
+        self,
+        collection: str,
+        state: str,
+        cursor: Tuple,
+        delay_seconds: float,
+    ) -> List[dict]:
+        """Rows due for delayed dispatch.
+
+        Filters on:
+          state = $state                      — strict cancellation
+          (updated_at, key) > cursor          — no re-fire (per-handler cursor)
+          updated_at + delay_seconds <= NOW() — the delay floor
+
+        Composite cursor + ASC ordering match `fetch_rows_since`.
+        """
+        try:
+            cursor_ts, cursor_key = cursor
+            self.cursor.execute(
+                """SELECT factory_name, collection, key, user_id, value, state,
+                          created_at, updated_at
+                   FROM factory_data
+                   WHERE factory_name = %s
+                     AND collection   = %s
+                     AND state        = %s
+                     AND (updated_at, key) > (%s, %s)
+                     AND updated_at + (%s * INTERVAL '1 second') <= NOW()
+                   ORDER BY updated_at ASC, key ASC""",
+                (
+                    self._factory_name,
+                    collection,
+                    state,
+                    cursor_ts,
+                    cursor_key,
+                    float(delay_seconds),
+                ),
+            )
+            rows = self.cursor.fetchall()
+            out = []
+            for row in rows:
+                raw = row[4]
+                if raw is None:
+                    payload = {}
+                elif isinstance(raw, dict):
+                    payload = raw
+                else:
+                    try:
+                        payload = json.loads(raw)
+                    except Exception:
+                        payload = {}
+                out.append({
+                    'factory_name': row[0],
+                    'collection':   row[1],
+                    'key':          row[2],
+                    'user_id':      row[3],
+                    'data':         payload,
+                    'state':        row[5],
+                    'created_at':   row[6],
+                    'updated_at':   row[7],
+                })
+            return out
+        except Exception as e:
+            log_error(f"fetch_due_rows failed for {collection}.{state}: {e}")
+            return []
+
     def fetch_item(self, factory_name: str, collection: str, key: str) -> Optional[dict]:
         """Fetch a single factory_data row as a full item dict."""
         try:

@@ -4,73 +4,64 @@ Everything flows through `factory_data`. Messages live in the `_messages`
 collection (state = topic, key = uuid); lifecycle items live in normal
 collections where `state` advances through the pipeline.
 
-Two subscription primitives are exposed to factory code:
+Two subscription shapes — that's the entire factory-author surface:
 
-    tf.on_state('collection', 'state')   — primary primitive
-    tf.on_message('topic')               — pure shorthand for
-                                           tf.on_state('_messages', 'topic')
+    @tf.on_state('orders', 'submitted').do
+    def handle(item): ...
 
-Both return the same builder. Three independent flags shape behaviour:
+    @tf.on_state('orders', 'submitted').delay(seconds=60).do
+    def escalate(item): ...
 
-    .on_startup_replay_latest()  — at startup, fire once on the single
-                                   most-recent existing row in (collection,
-                                   state). Then live.
-    .on_startup_replay_all()     — at startup, fire on every existing row in
-                                   (collection, state). Then live.
-    .process_latest_only()       — at every dispatch batch (startup replay,
-                                   safety poll, multi-NOTIFY drain), compress
-                                   the batch to its single most-recent row
-                                   (by updated_at, key). Older rows in the
-                                   batch are dropped — cursor still advances
-                                   so they never fire later.
+`tf.on_message('topic')` is shorthand for `tf.on_state('_messages', 'topic')`.
 
-Combinations are valid; flags compose. Default (none of the above): listen
-for new rows only, fire on every NOTIFY.
+Contract: subscribing to (collection, state) means "process every row
+currently in that state, plus every new arrival/transition into it." The
+HANDLER is responsible for moving the row out of state on success — either
+by transitioning to a different state via `tf.collection().set(key, ...)`
+or by deleting it via `.remove(key)`. If the handler doesn't transition,
+the row stays in scope and the safety poll will re-fire it every 10s.
+That's a feature for idempotent aggregators; a bug for everything else.
 
 Transport is a hybrid:
   * LISTEN on hashed channel `tf_state_<md5(factory.collection.state)>` —
     primary, low-latency path.
   * 10s safety poll over (updated_at, key) cursor — catches anything LISTEN
-    missed. A non-zero result emits log_warn so operators see NOTIFY drops.
-  * Per-(collection, state) dedupe LRU prevents the same row firing twice
-    when the safety poll and LISTEN both pick it up in the same window.
+    missed (network blip, slow consumer, restart). A non-zero result emits
+    log_warn so operators see NOTIFY drops.
+  * Per-handler dedupe LRU prevents the same (key, updated_at) firing twice
+    when the safety poll and LISTEN both pick up the same row.
+
+Cursor: per (collection, state), inits to epoch on first registration so
+the first safety-poll tick naturally processes every existing row in the
+state. Advances past every dispatched row via `(updated_at, key)` strict
+ordering — composite tuple to handle equal-timestamp rows correctly.
+
+Delay flag: `.delay(seconds=N)` defers dispatch until `updated_at + N <=
+now()`. Strict cancellation — if the row leaves the watched state before
+the delay elapses, the handler is skipped. Re-arm — on transition out and
+back in, `updated_at` bumps and the delay restarts.
 
 Lifecycle:
     1. Factory module imports tf and decorates handlers with `@tf.on_state(...)
        .do(...)`. Registrations are QUEUED — no DB connection opens at import
        time.
     2. Factory calls `tf.run_pending()` for the first time. The loop:
-         a. Runs `_first_tick_init()` once: drains the pending-registrations
-            queue (opens connection, issues LISTEN per channel) and publishes
-            the MCP catalog. Cursor inits per the replay-flag table below.
+         a. Runs `_first_tick_init()` once: drains pending registrations
+            (opens connection, LISTENs per hashed channel), prints the
+            startup banner, publishes the MCP catalog.
          b. Runs scheduled jobs.
-         c. Replays existing rows for any new (collection, state) handlers
-            (honouring the replay flags).
-         d. Runs the safety poll if 10s have elapsed since the last one.
+         c. Runs the safety poll if 10s have elapsed since the last one.
+         d. Runs delayed dispatch (per-tick query, no cadence floor).
          e. Drains LISTEN/NOTIFY queue and dispatches to handlers.
-    3. Subsequent calls to `run_pending()` skip step 2a (idempotent) but pick
-       up any registrations made AFTER the first tick (e.g. a handler that
-       calls `tf.on_state(...)` re-entrantly) — those are flushed at the
-       start of step 2e, so dispatch never sees a half-registered handler.
-
-Cursor-init policy at LISTEN-flush time:
-    no replay flag           → cursor = now()    (safety poll never resurrects
-                                                  rows that existed before the
-                                                  agent started — preserves
-                                                  the "new rows only" contract)
-    .on_startup_replay_latest() → cursor = epoch (replay's single SELECT
-                                                  advances cursor to that row)
-    .on_startup_replay_all()    → cursor = epoch (replay walks every row,
-                                                  cursor advances during
-                                                  dispatch)
-    For a given (collection, state), the FIRST registration's flags decide
-    cursor init. Subsequent registrations on the same key inherit the cursor.
+    3. Subsequent calls to `run_pending()` skip step 2a (idempotent) but
+       pick up any registrations made AFTER the first tick (re-entrant
+       case) — those are flushed at the top of dispatch.
 """
 
 import collections as _collections
-import hashlib
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from datetime import datetime as _datetime, timezone as _timezone
+from typing import Any, Callable, Dict, List, Tuple
 
 import schedule as _schedule
 
@@ -95,12 +86,12 @@ _handlers: Dict[tuple, List[dict]] = {}
 # (collection, state) share LISTEN, share cursor, share dedupe state.
 _cursors: Dict[tuple, Tuple[Any, str]] = {}
 
-# Per-(collection, state) recently-dispatched LRU. Prevents double-fire when
-# safety poll and LISTEN both deliver the same row. Key: (row_key,
+# Recently-dispatched dedupe LRU is now per-handler-entry (lives on the
+# entry dict in _handlers). Prevents the same row firing twice on the same
+# handler when safety-poll and LISTEN both pick it up. Key: (row_key,
 # updated_at_iso). FIFO-evict at _DEDUPE_LRU_CAP. The dedupe key uses
 # updated_at so legitimate re-writes to the same row key (which bump
 # updated_at) DO re-fire.
-_recent: Dict[tuple, "_collections.OrderedDict"] = {}
 _DEDUPE_LRU_CAP = 256
 
 # Safety-poll cadence — runs once per 10s, gated inside run_pending. Use
@@ -113,6 +104,14 @@ _last_safety_poll_ts: float = 0.0
 # on first occurrence per process, prevents log floods if a real collision
 # (or a misconfigured trigger) ever fires.
 _collision_warned: set = set()
+
+# Per-(collection, state) "first safety-poll tick done" set. The first tick
+# after registration intentionally processes every existing row in the state
+# (cursor=epoch) — that's the documented startup dispatch path, not a
+# NOTIFY drop. Suppressing the warn on the first tick keeps the "safety poll
+# caught N rows that LISTEN missed" log line meaningful: it ONLY fires when
+# NOTIFY actually dropped events.
+_safety_poll_seeded: set = set()
 
 # Pending registrations queue. Subscriptions registered before the first
 # `run_pending()` tick (the typical case at module import time) AND any
@@ -129,10 +128,10 @@ _pending_registrations: List[dict] = []
 _initialized = False
 
 
-# Sentinel used as the "epoch" cursor for replay-mode registrations. Strings
-# compare lexically with timestamps in `(updated_at, key) > cursor` queries
-# in postgres; we pass an actual datetime when calling fetch_rows_since.
-from datetime import datetime as _datetime, timezone as _timezone
+# Sentinel used as the "epoch" cursor for replay-mode registrations. Pairs
+# with the (updated_at, key) composite cursor used by fetch_rows_since /
+# fetch_due_rows — strict-greater-than on this baseline returns every
+# existing row in the (collection, state).
 _EPOCH = _datetime(1970, 1, 1, tzinfo=_timezone.utc)
 
 
@@ -194,44 +193,29 @@ class SubscriptionBuilder:
     """
     Fluent builder for tf.on_state(...) and tf.on_message(...).
 
-    Default: listen for new NOTIFY events only — no startup replay,
-    every row fires the handler once.
+    Two shapes:
+        @tf.on_state(collection, state).do(handler)
+        @tf.on_state(collection, state).delay(seconds=N).do(handler)
 
-    Three independent flags:
-        .on_startup_replay_latest() — at startup, fire ONCE on the single
-                                      most-recent existing row in
-                                      (collection, state).
-        .on_startup_replay_all()    — at startup, fire on EVERY existing row
-                                      in (collection, state).
-        .process_latest_only()      — at every dispatch batch (startup
-                                      replay, safety poll, multi-NOTIFY
-                                      drain), compress the batch to its
-                                      single most-recent row.
-
-    The two startup-replay methods are mutually exclusive — calling both is
-    valid; the LAST call wins. `process_latest_only()` composes orthogonally
-    with either or neither.
+    `.delay(seconds=N, minutes=N, hours=N)` defers dispatch by the given
+    delta. Strict cancellation — if the row leaves the watched state
+    before the delay elapses, the handler is skipped. Re-arm — on
+    transition out and back in, `updated_at` bumps and the delay restarts.
+    Granularity is the `tf.run_pending()` cadence (typically 1s);
+    sub-second delays don't make sense in this model. Time units are
+    additive within a single call: `.delay(seconds=30, minutes=2)` → 2m30s.
     """
 
     def __init__(self, collection: str, state: str):
         self._collection = collection
         self._state = state
-        self._replay_mode: Optional[str] = None  # None | 'latest' | 'all'
-        self._latest_only = False
+        self._delay_seconds: float = 0.0
 
-    def on_startup_replay_latest(self):
-        """At startup, fire the handler on only the most-recent existing row."""
-        self._replay_mode = 'latest'
-        return self
-
-    def on_startup_replay_all(self):
-        """At startup, fire the handler on every existing row in (collection, state)."""
-        self._replay_mode = 'all'
-        return self
-
-    def process_latest_only(self):
-        """Compress every dispatch batch (replay + safety-poll + NOTIFY drain) to the single most-recent row."""
-        self._latest_only = True
+    def delay(self, seconds: float = 0, minutes: float = 0, hours: float = 0):
+        delta = float(seconds) + float(minutes) * 60.0 + float(hours) * 3600.0
+        if delta < 0:
+            raise ValueError(f"delay must be non-negative, got {delta}")
+        self._delay_seconds = delta
         return self
 
     def do(self, handler: Callable):
@@ -239,15 +223,14 @@ class SubscriptionBuilder:
             collection=self._collection,
             state=self._state,
             handler=handler,
-            replay_mode=self._replay_mode,
-            latest_only=self._latest_only,
+            delay_seconds=self._delay_seconds,
         )
         return handler
 
 
 def on_state(collection: str, state: str) -> SubscriptionBuilder:
     """
-    Subscribe to state transitions on a collection.
+    Subscribe to (collection, state).
 
     Usage:
         @tf.on_state('documents', 'loaded').do
@@ -256,11 +239,11 @@ def on_state(collection: str, state: str) -> SubscriptionBuilder:
             #         created_at, updated_at}
             ...
 
-    Default: only fires on rows that arrive AFTER subscription. Opt into
-    startup replay with `.on_startup_replay_latest()` (single row) or
-    `.on_startup_replay_all()` (every existing row). Add
-    `.process_latest_only()` to compress every dispatch batch to its
-    most-recent row.
+    Contract: every row currently in (collection, state) AND every new
+    row arriving in it will fire the handler. Your handler MUST move
+    the row out of the state on success (transition via
+    `tf.collection(...).set(key, state='next', ...)` or delete via
+    `.remove(key)`); otherwise the safety poll re-fires it every 10s.
     """
     return SubscriptionBuilder(collection, state)
 
@@ -275,8 +258,7 @@ def on_message(topic: str) -> SubscriptionBuilder:
 # =============================================================================
 
 def _enqueue_registration(collection: str, state: str, handler: Callable,
-                          replay_mode: Optional[str] = None,
-                          latest_only: bool = False):
+                          delay_seconds: float = 0.0):
     """
     Queue a subscription registration. The actual LISTEN + handler-table
     insertion happens later, when `_flush_registrations()` is called from
@@ -287,11 +269,10 @@ def _enqueue_registration(collection: str, state: str, handler: Callable,
     not here — keeps imports light.
     """
     _pending_registrations.append({
-        'collection':  collection,
-        'state':       state,
-        'handler':     handler,
-        'replay_mode': replay_mode,
-        'latest_only': latest_only,
+        'collection':    collection,
+        'state':         state,
+        'handler':       handler,
+        'delay_seconds': delay_seconds,
     })
 
 
@@ -300,7 +281,8 @@ def _flush_registrations():
     Drain the pending-registrations queue: open the provider connection if
     needed, issue LISTEN once per distinct hashed channel, add each handler
     to the active `_handlers` registry, and init the per-(collection,state)
-    cursor for any newly-seen key. Idempotent.
+    cursor at epoch so the first safety-poll tick processes every existing
+    row in the state. Idempotent.
     """
     if not _pending_registrations:
         return
@@ -325,29 +307,29 @@ def _flush_registrations():
                 log_error(f"LISTEN {channel} failed: {e}")
                 continue
 
-        # Cursor init — first registration for this (collection, state) wins.
-        # Subsequent registrations on the same key inherit the existing cursor;
-        # otherwise an `_all()` registered after a `_latest()` one would
-        # silently rewind the safety-poll window.
+        # Cursor inits to epoch on first registration for this (collection,
+        # state) so the first safety-poll tick naturally processes every
+        # existing row. Subsequent registrations on the same key inherit
+        # the cursor as it advances.
         if key not in _cursors:
-            if reg['replay_mode'] in ('latest', 'all'):
-                # Cursor at epoch — replay's SELECT will advance it.
-                _cursors[key] = (_EPOCH, '')
-            else:
-                # No replay — pin cursor at LISTEN-issue moment so the safety
-                # poll doesn't resurrect rows that existed before the agent
-                # started.
-                _cursors[key] = (_datetime.now(_timezone.utc), '')
+            _cursors[key] = (_EPOCH, '')
+
+        # Delayed handlers get their own cursor, also at epoch — same
+        # rationale, the delay query just adds an `updated_at + delay <=
+        # NOW()` filter on top.
+        delay_seconds = reg.get('delay_seconds') or 0.0
+        delay_cursor = (_EPOCH, '') if delay_seconds > 0 else None
 
         _handlers.setdefault(key, []).append({
-            'handler':     reg['handler'],
-            'replay_mode': reg['replay_mode'],
-            'latest_only': reg.get('latest_only', False),
-            'replayed':    False,
+            'handler':       reg['handler'],
+            'delay_seconds': delay_seconds,
+            'delay_cursor':  delay_cursor,
+            # Per-entry dedupe LRU — prevents double-fire on this specific
+            # handler when LISTEN + safety-poll race for the same row.
+            'seen':          _collections.OrderedDict(),
         })
         log_info(
-            f"Registered handler for {coll}.{state} "
-            f"(replay_mode={reg['replay_mode']}, latest_only={reg.get('latest_only', False)})"
+            f"Registered handler for {coll}.{state} (delay_seconds={delay_seconds})"
         )
 
 
@@ -369,6 +351,7 @@ def _first_tick_init():
     if _initialized:
         return
 
+    _log_startup_banner()
     _flush_registrations()
 
     # Publish the MCP catalog once. Lazy import to avoid module-load cycle
@@ -380,6 +363,28 @@ def _first_tick_init():
         log_error(f"MCP catalog publish failed (continuing): {e}")
 
     _initialized = True
+
+
+def _log_startup_banner():
+    """Emit a single-line provenance banner at first run_pending().
+
+    Build SHA + date are baked into the agent image at `docker build` time
+    (see `core/python/build.sh`). Falls back to 'dev' for `pip install -e`
+    local runs where the env vars aren't set.
+    """
+    try:
+        from teenyfactories.__version__ import (
+            __version__, __build_sha__, __build_date__,
+        )
+        from teenyfactories.config import FACTORY_NAME, AGENT_NAME
+        log_info(
+            f"teenyfactories {__version__} "
+            f"(build {__build_sha__} {__build_date__}) — "
+            f"agent={AGENT_NAME!r} factory={FACTORY_NAME!r}"
+        )
+    except Exception as e:
+        # Banner failure must NEVER block bootstrap. Log + continue.
+        log_error(f"startup banner failed (continuing): {e}")
 
 
 def run_pending():
@@ -413,13 +418,13 @@ def run_pending():
     except Exception as e:
         log_error(f"Scheduled job raised: {e}\n{_tb.format_exc()}")
     try:
-        _replay_pending_subscriptions()
-    except Exception as e:
-        log_error(f"Subscription replay raised: {e}\n{_tb.format_exc()}")
-    try:
         _run_safety_poll_if_due()
     except Exception as e:
         log_error(f"Safety poll raised: {e}\n{_tb.format_exc()}")
+    try:
+        _run_delayed_dispatch()
+    except Exception as e:
+        log_error(f"Delayed dispatch raised: {e}\n{_tb.format_exc()}")
     try:
         _drain_notifications()
     except Exception as e:
@@ -435,22 +440,17 @@ def _row_sort_key(row: dict) -> tuple:
     return (row.get('updated_at'), row.get('key') or '')
 
 
-def _compress_to_latest(rows: List[dict]) -> List[dict]:
-    """Reduce a batch to its single most-recent row by (updated_at, key).
-
-    Used when any handler in the (collection, state) group has
-    `latest_only=True`. The cursor still advances past the dropped rows so
-    they never re-fire — that's the documented semantics.
-    """
-    if not rows:
-        return rows
-    return [max(rows, key=_row_sort_key)]
-
-
 def _dispatch_to_entries(entries: List[dict], item: dict, source: str):
-    """Fire the handlers for one row, honouring dedupe + advancing cursor.
+    """Fire the handlers for one row, honouring per-entry dedupe + advancing
+    the shared per-(coll, state) cursor.
 
     `source` is 'replay' | 'listen' | 'poll' — used in failure logs only.
+
+    Each entry has its own `seen` LRU. A given (row_key, updated_at) won't
+    fire the same entry twice across the LISTEN/safety-poll race window.
+    Different entries on the same (coll, state) each track independently —
+    so registering two handlers on the same key (mixed replay shapes, etc)
+    doesn't suppress one of them.
     """
     coll = item.get('collection')
     state = item.get('state')
@@ -459,14 +459,16 @@ def _dispatch_to_entries(entries: List[dict], item: dict, source: str):
     key = (coll, state)
 
     dedupe_key = (item.get('key') or '', _iso(item.get('updated_at')))
-    seen = _recent.setdefault(key, _collections.OrderedDict())
-    if dedupe_key in seen:
-        return  # already dispatched via the other path
-    seen[dedupe_key] = source
-    while len(seen) > _DEDUPE_LRU_CAP:
-        seen.popitem(last=False)
 
+    fired_any = False
     for entry in entries:
+        seen = entry.setdefault('seen', _collections.OrderedDict())
+        if dedupe_key in seen:
+            continue  # this entry already fired on this row+updated_at
+        seen[dedupe_key] = source
+        while len(seen) > _DEDUPE_LRU_CAP:
+            seen.popitem(last=False)
+        fired_any = True
         try:
             entry['handler'](item)
         except Exception as e:
@@ -476,12 +478,14 @@ def _dispatch_to_entries(entries: List[dict], item: dict, source: str):
                 f"(source={source}): {e}"
             )
 
-    # Advance cursor past this row regardless of handler success — handler
-    # failures are logged; we don't want a poisoned row to be retried forever.
-    sort_key = _row_sort_key(item)
-    cursor = _cursors.get(key)
-    if cursor is None or sort_key > cursor:
-        _cursors[key] = sort_key
+    # Advance shared cursor past this row regardless of handler success.
+    # Done once per row (not per entry); subsequent safety-poll queries
+    # filter on (updated_at, key) > cursor, so the row never re-surfaces.
+    if fired_any:
+        sort_key = _row_sort_key(item)
+        cursor = _cursors.get(key)
+        if cursor is None or sort_key > cursor:
+            _cursors[key] = sort_key
 
 
 def _iso(ts) -> str:
@@ -494,58 +498,8 @@ def _iso(ts) -> str:
 
 
 # =============================================================================
-# Replay / safety poll / NOTIFY drain — three dispatch entry points
+# Safety poll / NOTIFY drain / delayed dispatch — three dispatch entry points
 # =============================================================================
-
-def _replay_pending_subscriptions():
-    """One-shot: fire handlers for existing rows in (collection, state).
-
-    Honours per-entry flags. `replay_mode` decides which rows are pulled;
-    `latest_only` further compresses the resulting batch.
-        replay_mode=None     → skip (handler still subscribes via LISTEN).
-        replay_mode='latest' → fetch all rows in (coll, state), then keep
-                               only the most-recent one.
-        replay_mode='all'    → fetch all rows in (coll, state); fire on each.
-    """
-    from teenyfactories.collection import collection as _coll
-    for (coll_name, state), entries in list(_handlers.items()):
-        # Decide what work to do for this key. The "replayed" flag is
-        # per-entry so a handler added later can still replay even if its
-        # siblings already did.
-        pending_entries = [e for e in entries if not e['replayed'] and e.get('replay_mode')]
-        if not pending_entries:
-            for e in entries:
-                e['replayed'] = True
-            continue
-
-        try:
-            rows = _coll(coll_name).get_all(state=state)
-        except Exception as e:
-            log_error(f"Replay query failed for {coll_name}.{state}: {e}")
-            for entry in pending_entries:
-                entry['replayed'] = True
-            continue
-
-        # Sort once — _dispatch_to_entries uses (updated_at, key) for cursor
-        # ordering, so rows arrive in chronological order.
-        rows = sorted(rows, key=_row_sort_key)
-
-        # Per-entry replay batch — different handlers on the same (coll, state)
-        # may have different replay shapes (rare, but supported by the handler
-        # registry). Build the per-entry row list, then dispatch through the
-        # shared path so dedupe + cursor advance fire once.
-        for entry in pending_entries:
-            mode = entry['replay_mode']
-            if mode == 'latest':
-                batch = _compress_to_latest(rows)
-            else:  # 'all'
-                batch = list(rows)
-            if entry.get('latest_only'):
-                batch = _compress_to_latest(batch)
-            for item in batch:
-                _dispatch_to_entries([entry], item, source='replay')
-            entry['replayed'] = True
-
 
 def _run_safety_poll_if_due():
     """10-second safety poll — catches anything LISTEN missed.
@@ -565,6 +519,14 @@ def _run_safety_poll_if_due():
 
     provider = _get_provider()
     for (coll_name, state), entries in list(_handlers.items()):
+        # Safety poll only catches up the LIVE-dispatch path — delayed
+        # handlers run their own per-tick query and manage their own
+        # cursor. Skip the (coll, state) if every handler is delayed;
+        # otherwise pass the non-delayed entries forward.
+        live_entries = [e for e in entries if not (e.get('delay_seconds') or 0.0)]
+        if not live_entries:
+            continue
+
         cursor = _cursors.get((coll_name, state))
         if cursor is None:
             # No cursor yet (registration hasn't flushed). Skip — next tick
@@ -573,18 +535,73 @@ def _run_safety_poll_if_due():
 
         rows = provider.fetch_rows_since(coll_name, state, cursor)
         if not rows:
+            _safety_poll_seeded.add((coll_name, state))
             continue
 
-        log_warn(
-            f"safety poll caught {len(rows)} row(s) that LISTEN missed "
-            f"for {coll_name}.{state} (cursor={cursor})"
-        )
+        seeded = (coll_name, state) in _safety_poll_seeded
+        if not seeded:
+            # First tick for this (coll, state) — cursor=epoch by design,
+            # so finding rows is the documented startup dispatch path, not
+            # a NOTIFY drop. Log it as info, not warn.
+            log_info(
+                f"safety poll seeded {coll_name}.{state} with {len(rows)} "
+                f"existing row(s) on first tick"
+            )
+            _safety_poll_seeded.add((coll_name, state))
+        else:
+            log_warn(
+                f"safety poll caught {len(rows)} row(s) that LISTEN missed "
+                f"for {coll_name}.{state} (cursor={cursor})"
+            )
 
-        any_latest_only = any(e.get('latest_only') for e in entries)
-        batch = _compress_to_latest(rows) if any_latest_only else rows
+        for item in rows:
+            _dispatch_to_entries(live_entries, item, source='poll')
 
-        for item in batch:
-            _dispatch_to_entries(entries, item, source='poll')
+
+def _run_delayed_dispatch():
+    """Per-tick: fire delayed handlers whose rows are now due.
+
+    Delayed handlers do NOT dispatch on NOTIFY. Their entire dispatch path
+    is this query, run once per `run_pending()` tick:
+        rows where state = watched_state          (strict cancellation)
+              AND (updated_at, key) > delay_cursor (no re-fire)
+              AND updated_at + delay_seconds <= NOW()  (the delay)
+    The handler fires, the per-handler cursor advances, and we move on.
+    Granularity is the run_pending() cadence (typically 1s).
+    """
+    if not _handlers:
+        return
+    provider = _get_provider()
+    for (coll_name, state), entries in list(_handlers.items()):
+        for entry in entries:
+            delay_seconds = entry.get('delay_seconds') or 0.0
+            if delay_seconds <= 0:
+                continue
+            cursor = entry.get('delay_cursor')
+            if cursor is None:
+                continue
+
+            rows = provider.fetch_due_rows(coll_name, state, cursor, delay_seconds)
+            if not rows:
+                continue
+
+            for item in rows:
+                # Delayed dispatch path bypasses the shared dedupe LRU — its
+                # own cursor advancement is monotonic and prevents re-fire
+                # within this lane. The shared LRU is only relevant for the
+                # LISTEN-vs-safety-poll race in the live lane.
+                try:
+                    entry['handler'](item)
+                except Exception as e:
+                    item_key = item.get('key') if isinstance(item, dict) else '<unknown>'
+                    log_error(
+                        f"Delayed handler {coll_name}.{state} failed "
+                        f"on key={item_key!r} (delay={delay_seconds}s): {e}"
+                    )
+                # Advance per-entry cursor regardless of handler success.
+                sort_key = _row_sort_key(item)
+                if sort_key > entry['delay_cursor']:
+                    entry['delay_cursor'] = sort_key
 
 
 def _drain_notifications():
@@ -641,12 +658,13 @@ def _drain_notifications():
 
     for handler_key, items in grouped.items():
         entries = _handlers.get(handler_key, [])
-        if not entries:
+        # NOTIFY dispatch fires only the live (non-delayed) handlers. Delayed
+        # handlers have their own per-tick query path and skip this lane.
+        live_entries = [e for e in entries if not (e.get('delay_seconds') or 0.0)]
+        if not live_entries:
             continue
-        any_latest_only = any(e.get('latest_only') for e in entries)
-        batch = _compress_to_latest(items) if any_latest_only else items
         # Sort to keep dispatch in (updated_at, key) order — matters for
         # multi-row drains where handler ordering may matter.
-        batch = sorted(batch, key=_row_sort_key)
+        batch = sorted(items, key=_row_sort_key)
         for item in batch:
-            _dispatch_to_entries(entries, item, source='listen')
+            _dispatch_to_entries(live_entries, item, source='listen')

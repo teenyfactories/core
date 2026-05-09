@@ -19,6 +19,12 @@ RUN WHL=$(ls /tmp/*.whl) \
     && pip install --no-cache-dir "${WHL}[all]" \
     && rm /tmp/*.whl
 
+# Build provenance — passed in from build.sh, surfaced in the startup banner.
+ARG BUILD_SHA=unknown
+ARG BUILD_DATE=unknown
+ENV TF_BUILD_SHA=${BUILD_SHA} \
+    TF_BUILD_DATE=${BUILD_DATE}
+
 # Run as non-root user (UID 1000 matches typical host user)
 RUN useradd -u 1000 -m appuser
 USER appuser
