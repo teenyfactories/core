@@ -1,0 +1,38 @@
+{
+  "name": "teenyfactories",
+  "version": "0.1.0-dev.0",
+  "description": "Open-core framework for distributed AI agent factories. JavaScript port — placeholder until the JS implementation lands. Use the Python implementation today: pip install --pre teenyfactories.",
+  "keywords": [
+    "teenyfactories",
+    "agent",
+    "llm",
+    "postgres",
+    "pub-sub",
+    "factory",
+    "ai-agents",
+    "placeholder"
+  ],
+  "homepage": "https://github.com/teenyfactories/core",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/teenyfactories/core.git",
+    "directory": "nodejs"
+  },
+  "bugs": {
+    "url": "https://github.com/teenyfactories/core/issues"
+  },
+  "license": "MIT",
+  "author": "TeenyFactories Team",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
