@@ -7,6 +7,15 @@
 #   2. build-and-push (agent image)                      — runs on push to main,
 #                                                          only if the gating
 #                                                          license check passes.
+#   3. publish-pypi (teenyfactories wheel + sdist)       — runs on push to main,
+#                                                          gated on license-check.
+#                                                          Version = 0.1.0.devYYYYMMDD
+#                                                          (UTC). PEP 440 dev
+#                                                          pre-release — pip
+#                                                          installs need `--pre`.
+#                                                          Idempotent — skips if
+#                                                          today's version is
+#                                                          already on PyPI.
 #
 # The `[data]` extra currently pulls PyMuPDF (AGPL-3.0). The base install
 # stays clean; the extras job reports but does not fail the pipeline. Until
@@ -98,3 +107,68 @@ jobs:
       - name: Build and push
         run: |
           TAG=dev GHCR_IMAGE=${{ env.GHCR_IMAGE }} PUSH=true ./python/build.sh
+
+  # ── Stage 3 — publish to PyPI ────────────────────────────────────────────
+  # Date-based versioning: 0.1.0.devYYYYMMDD (UTC). PEP 440 dev pre-release —
+  # `pip install teenyfactories` won't pick these up without `--pre`. One
+  # publish per day, idempotent — if today's version is already on PyPI, the
+  # job logs and skips rather than failing. Requires the `PYPI_API_TOKEN`
+  # repo secret.
+
+  publish-pypi:
+    name: publish (PyPI, 0.1.0.devYYYYMMDD)
+    needs: [license-check]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Compute date-based version
+        id: version
+        run: |
+          VERSION="0.1.0.dev$(date -u +%Y%m%d)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Computed version: $VERSION"
+
+      - name: Check whether version is already on PyPI
+        id: check
+        run: |
+          STATUS=$(curl -s -o /dev/null -w '%{http_code}' \
+            "https://pypi.org/pypi/teenyfactories/${{ steps.version.outputs.version }}/json")
+          if [ "$STATUS" = "200" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Version ${{ steps.version.outputs.version }} already on PyPI — skipping publish."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Version not yet on PyPI — will publish."
+          fi
+
+      - name: Pin version in pyproject.toml
+        if: steps.check.outputs.exists == 'false'
+        working-directory: python
+        run: |
+          sed -i 's/^version = .*/version = "${{ steps.version.outputs.version }}"/' pyproject.toml
+          grep '^version' pyproject.toml
+
+      - name: Build sdist + wheel
+        if: steps.check.outputs.exists == 'false'
+        working-directory: python
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+          ls -la dist/
+
+      - name: Upload to PyPI
+        if: steps.check.outputs.exists == 'false'
+        working-directory: python
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          python -m pip install --upgrade twine
+          twine upload --non-interactive dist/*

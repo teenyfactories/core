@@ -1,47 +1,35 @@
 # TeenyFactories
 
-**Multi-provider LLM and message-queue abstraction for distributed agent systems.**
+**Open-core framework for distributed AI agent factories.**
 
-TeenyFactories is a small framework for building distributed AI agents that
-coordinate through a shared store. Agents subscribe to *states* on rows;
-writing a row with a given state fires a notification, which fans out to
-every subscriber. That's the whole paradigm.
-
-```
-tf.store('documents').set(key, value, state='loaded')
+```python
+import teenyfactories as tf
 
 @tf.on_state('documents', 'loaded').do
-def handle(item): ...
+def analyse(item):
+    tf.collection('documents').set(item['key'], state='analysed')
+
+while True:
+    tf.run_pending()
+    tf.sleep(1)
 ```
 
-The framework abstracts over LLM providers (OpenAI, Anthropic, Google,
-Ollama, Azure Bedrock) and message backends (PostgreSQL LISTEN/NOTIFY,
-Redis pub/sub) so the same agent code runs against whichever combination
-the deployment chooses.
+## What's here
 
-## Implementations
+| | |
+|---|---|
+| [`python/`](python/) | The `teenyfactories` library. **MIT open source.** `pip install --pre teenyfactories`. Full library docs in [`python/README.md`](python/README.md) — also the PyPI page. |
+| `ghcr.io/teenyfactories/agent:dev` | Container base image with the library pre-installed. Every factory agent runs on this. Built from `python/Dockerfile.build`. |
 
-| Language    | Status      | Location          | Install                       |
-|-------------|-------------|-------------------|-------------------------------|
-| Python      | available   | [`python/`](python/)         | `pip install teenyfactories`  |
-| JavaScript  | planned     | `javascript/`     | (not yet published)           |
+## What sits around it
 
-See each implementation's own README for install instructions, the API
-surface, and quick-start examples.
+- **Orchestrator** — proprietary app that discovers factories, spawns agent containers, and provides the UI / chat / state-graph editor. Separate repo.
+- **Factories** — your code. One per problem domain. `factory.yml` + `agents/*.py`. Run either standalone via `docker compose` (single-factory mode) or under the orchestrator (multi-factory mode).
 
-## Why two implementations
-
-Factories and agents written in one language often need to integrate with
-services and tooling in another. Pinning the framework to Python means
-JavaScript-native UIs, edge functions, or front-of-house components have
-to bridge over HTTP. A native JS port lets the same `tf.on_state` /
-`tf.send_message` paradigm run wherever it's needed, with the shared
-PostgreSQL or Redis backend as the coordination layer.
-
-The protocol — what gets written to `factory_data` rows, what NOTIFY
-channels are named, how messages are framed — is the same across
-languages. Implementations are interchangeable consumers.
+Compose examples for both modes live in the orchestrator repo's docs.
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+`teenyfactories` (this repo): **MIT** — see [`LICENSE`](LICENSE).
+
+The orchestrator and any factory in `factories/<name>/` is licensed per its own repo. The orchestrator is currently proprietary with a free option; individual factories choose their own license.
