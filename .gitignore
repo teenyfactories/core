@@ -3,3 +3,6 @@ python/build/
 python/*.egg-info/
 __pycache__/
 *.pyc
+
+# Claude Code workspace memory — canonical lives at workspace root.
+.claude/
