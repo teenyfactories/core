@@ -1,15 +1,16 @@
 # Single staged pipeline for the core repo.
 #
 # Stages:
-#   1. license-check (python, base install)              — gating, runs on PR + push
-#      license-check-extras (python, [all,data] extras)  — informational only,
-#                                                          continue-on-error
+#   1. license-check (python, base install)              — gating, PR + push
+#      license-check-extras (python, [all,data] extras)  — gating, PR + push
 #   2. build-and-push (agent image)                      — runs on push to main,
-#                                                          only if the gating
-#                                                          license check passes.
+#                                                          needs BOTH license
+#                                                          checks. Publishes to
+#                                                          GHCR + Docker Hub.
 #   3. publish-pypi (teenyfactories wheel + sdist)       — runs on push to main,
-#                                                          gated on license-check.
-#                                                          Version = 0.1.0.devYYYYMMDD
+#                                                          needs BOTH license
+#                                                          checks. Version =
+#                                                          0.1.0.devYYYYMMDD
 #                                                          (UTC). PEP 440 dev
 #                                                          pre-release — pip
 #                                                          installs need `--pre`.
@@ -17,10 +18,10 @@
 #                                                          today's version is
 #                                                          already on PyPI.
 #
-# The `[data]` extra currently pulls PyMuPDF (AGPL-3.0). The base install
-# stays clean; the extras job reports but does not fail the pipeline. Until
-# PyMuPDF is replaced or commercially licensed, factories that opt into
-# `[data]` carry that exposure — the report keeps it visible.
+# Both license checks are gating: any copyleft (AGPL / GPL / SSPL / CC-BY-SA)
+# in the base install OR the [all,data] extras fails the pipeline. The
+# defensive grep guards against accidental copyleft reintroduction in future
+# dependency bumps.
 
 name: on_push
 
@@ -60,35 +61,36 @@ jobs:
           echo "OK — no copyleft killers in base install."
 
   license-check-extras:
-    name: license-check (python, [all] extras — informational)
+    name: license-check (python, [all,data] extras)
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
-      - name: install package with [all] extras
+      - name: install package with [all,data] extras
         run: |
           pip install --upgrade pip
           pip install -e "./python[all,data]"
           pip install pip-licenses
-      - name: report any copyleft in extras
+      - name: scan licenses (gating)
         run: |
           pip-licenses --format=csv --no-version > licenses-extras.csv
+          cat licenses-extras.csv
           if grep -E -i ',\s*"?(AGPL|GNU Affero|GPL-2|GPL-3|GNU General Public License v[23]|SSPL|CC-BY-SA)' licenses-extras.csv; then
-            echo "::warning::Optional extras include a copyleft dep. Factories enabling these extras need a license decision."
-            echo "::warning::Known: PyMuPDF in [data] is AGPL-3.0 — needs replacement OR Artifex commercial license."
-          else
-            echo "OK — no copyleft in optional extras either."
+            echo "::error::Found a copyleft license in [all,data] extras — incompatible with proprietary distribution."
+            echo "::error::Known offender: PyMuPDF in [data] is AGPL-3.0. Replace with a permissive-licence alternative (pypdf, pdfminer.six), remove from [data], or obtain an Artifex commercial license."
+            exit 1
           fi
+          echo "OK — no copyleft in [all,data] extras."
 
-  # ── Stage 2 — build + push image ──────────────────────────────────────────
-  # Only fires on push to main, only if the gating license check passed.
+  # ── Stage 2 — build + push image to GHCR and Docker Hub ──────────────────
+  # Only fires on push to main, only if BOTH license checks passed. Build
+  # once locally, then push to both registries with the same digest.
 
   build-and-push:
-    name: build-and-push (agent:dev image)
-    needs: [license-check]
+    name: build-and-push (agent:dev image, GHCR + Docker Hub)
+    needs: [license-check, license-check-extras]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -104,9 +106,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          registry: docker.io
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push to GHCR
         run: |
           TAG=dev GHCR_IMAGE=${{ env.GHCR_IMAGE }} PUSH=true ./python/build.sh
+
+      - name: Retag + push to Docker Hub
+        run: |
+          docker tag "${{ env.GHCR_IMAGE }}:dev" "${{ secrets.DOCKERHUB_USERNAME }}/agent:dev"
+          docker push "${{ secrets.DOCKERHUB_USERNAME }}/agent:dev"
 
   # ── Stage 3 — publish to PyPI ────────────────────────────────────────────
   # Date-based versioning: 0.1.0.devYYYYMMDD (UTC). PEP 440 dev pre-release —
@@ -117,7 +131,7 @@ jobs:
 
   publish-pypi:
     name: publish (PyPI, 0.1.0.devYYYYMMDD)
-    needs: [license-check]
+    needs: [license-check, license-check-extras]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
