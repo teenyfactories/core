@@ -6,9 +6,12 @@ was never wired up under the current `factory_data`-backed pub/sub model
 transport, start here — the provider needs to:
 
 1. Mirror the minimal surface area used by `message_queue.base`:
-   connect(), listen(channel), poll_notifications(), fetch_item(...).
-2. Coexist with the state/NOTIFY semantics: a catalog listener for catalog
-   changes, and per-collection channels for state transitions.
+   connect(), listen(channel), poll_notifications(),
+   fetch_rows(collection, state),
+   fetch_due_rows(collection, state, delay_seconds).
+2. Coexist with the pipeline-poll model: a single advisory wake channel
+   (equivalent of `tf_data_changed`) used only to trigger a poll — the
+   state itself is the queue; dispatch is poll-based, not push.
 3. Be selectable via a MESSAGE_QUEUE_PROVIDER env var dispatched in
    `message_queue.base._get_provider()`.
 

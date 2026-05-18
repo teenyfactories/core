@@ -2,9 +2,10 @@
 TeenyFactories — Python framework for distributed agent systems backed by Postgres.
 
 All factory data lives in the `factory_data` table; every row carries a
-`state` column that drives pub/sub via Postgres LISTEN/NOTIFY. Agents react
-to state transitions on real lifecycle rows (`tf.on_state`) or to
-fire-and-forget signals on the `_messages` collection (`tf.on_message`).
+`state` column. A subscribed `(collection, state)` IS a FIFO queue: agents
+react to rows in a state via `tf.on_state`, and the handler consumes a row
+by transitioning its state or deleting it. There is no message bus —
+chain stages by writing the next state.
 
 Usage:
     import teenyfactories as tf
@@ -13,8 +14,13 @@ Usage:
     def handle(item):
         # item = {factory_name, collection, key, user_id, data, state,
         #         created_at, updated_at}
-        tf.collection('documents').set(item['key'], state='processed')
-        tf.send_message('analysis_done').with_data({'key': item['key']})
+        # ... do the work, then move the row out of 'loaded':
+        tf.collection('documents').set(item['key'], state='processed',
+                                       data={**item['data'], 'analysed': True})
+
+    @tf.on_state('documents', 'processed').do
+    def downstream(item):
+        ...
 
     tf.on_schedule.every(10).minutes.do(periodic_job)
 
@@ -41,7 +47,7 @@ from .llm import call_llm
 from .secrets import secrets
 
 # Message Queue
-from .message_queue import send_message, on_message, on_state, run_pending
+from .message_queue import on_state, run_pending
 
 # MCP Tools
 from .mcp import add_mcp_server, add_mcp_tool
@@ -78,7 +84,7 @@ __all__ = [
     'secrets',
 
     # Message Queue
-    'send_message', 'on_message', 'on_state', 'run_pending',
+    'on_state', 'run_pending',
 
     # MCP Tools
     'add_mcp_server', 'add_mcp_tool',

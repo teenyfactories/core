@@ -1,22 +1,19 @@
-"""PostgreSQL connection + LISTEN/NOTIFY primitives for the message queue.
+"""PostgreSQL connection + NOTIFY-wake + poll primitives for the message queue.
 
-Messages and lifecycle items both live in factory_data now. This provider
-just maintains a connection with autocommit, runs LISTEN on channels that
-subscribers register, and surfaces raw notifications. All topic logic is in
-``message_queue.base``.
+Everything lives in factory_data. This provider maintains an autocommit
+connection, LISTENs the single global ``tf_data_changed`` wake channel, and
+exposes plain ``ORDER BY (updated_at, key)`` scans of a ``(collection,
+state)``. All dispatch/strike logic is in ``message_queue.base``.
 
-NOTIFY channel names are hashed (md5) to dodge Postgres's 63-byte
-NAMEDATALEN-1 limit on plaintext `{factory}.{collection}.{state}` strings.
-The trigger emits on `tf_state_<32hex>` and `tf_collection_<32hex>`; tf core
-LISTENs on the same hashed names. Payload-side validation in
-`message_queue.base._drain_notifications` confirms the incoming row matches
-the handler's registered (collection, state) — collisions are vanishingly
-improbable (1 in 3.4×10^38) but the guard logs and drops them either way.
+There is no per-state channel and no client-side channel hashing anymore.
+``tf_data_changed`` is emitted by the DB trigger (migration
+``2026-05-09T0536_notify_generic_channels.sql``) on every factory_data write
+with a JSON payload that includes ``factory_name``; base.py uses it purely as
+an advisory "poll now" wake, filtered by ``factory_name``.
 """
 
-import hashlib
 import json
-from typing import List, Optional, Tuple
+from typing import List
 
 try:
     import psycopg2
@@ -28,20 +25,34 @@ from teenyfactories import config
 from teenyfactories.logging import log_info, log_error
 
 
-# =============================================================================
-# Channel-name hashing — keeps LISTEN/NOTIFY targets under the 63-byte cap
-# =============================================================================
-
-def hash_state_channel(factory: str, collection: str, state: str) -> str:
-    """Hashed channel for per-(collection, state) NOTIFY. 41 chars."""
-    h = hashlib.md5(f"{factory}.{collection}.{state}".encode("utf-8")).hexdigest()
-    return f"tf_state_{h}"
+# Single global wake channel. Emitted by the factory_data NOTIFY trigger
+# (migration 2026-05-09T0536_notify_generic_channels.sql) on every write;
+# payload is JSON including factory_name. base.py LISTENs only this and
+# treats any own-factory fire as "poll now".
+TF_DATA_CHANGED_CHANNEL = "tf_data_changed"
 
 
-def hash_collection_channel(factory: str, collection: str) -> str:
-    """Hashed channel for any-state per-collection NOTIFY. 46 chars."""
-    h = hashlib.md5(f"{factory}.{collection}".encode("utf-8")).hexdigest()
-    return f"tf_collection_{h}"
+def _row_to_item(row) -> dict:
+    raw = row[4]
+    if raw is None:
+        payload = {}
+    elif isinstance(raw, dict):
+        payload = raw
+    else:
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            payload = {}
+    return {
+        'factory_name': row[0],
+        'collection':   row[1],
+        'key':          row[2],
+        'user_id':      row[3],
+        'data':         payload,
+        'state':        row[5],
+        'created_at':   row[6],
+        'updated_at':   row[7],
+    }
 
 
 class PostgresProvider:
@@ -49,10 +60,10 @@ class PostgresProvider:
 
     def __init__(self):
         self.connection = None
-        self.cursor = None                # Used for reads AND direct writes to factory_data
+        self.cursor = None                # reads AND direct writes to factory_data
         self._factory_name = config.FACTORY_NAME
         self._agent_name = config.AGENT_NAME
-        self._listening = set()           # set of channel names we've LISTENed on
+        self._listening = set()           # channels we've LISTENed on
 
     def connect(self):
         if psycopg2 is None:
@@ -72,20 +83,23 @@ class PostgresProvider:
         log_info(f"Connected to PostgreSQL at {config.POSTGRES_HOST}:{config.POSTGRES_PORT}/{config.POSTGRES_DB}")
 
     # =========================================================================
-    # LISTEN / NOTIFY
+    # LISTEN / NOTIFY (wake only)
     # =========================================================================
 
     def listen(self, channel: str):
-        """Issue LISTEN on a channel if we haven't already."""
+        """Issue LISTEN on a channel if we haven't already. Idempotent."""
         if channel in self._listening:
             return
-        # Quote identifier for Postgres — channel may contain dots/underscores.
+        # Quote identifier — channel may contain underscores.
         self.cursor.execute(f'LISTEN "{channel}"')
         self._listening.add(channel)
         log_info(f"LISTEN on channel: {channel}")
 
     def poll_notifications(self) -> List[dict]:
-        """Drain queued NOTIFYs. Returns a list of {channel, payload} dicts."""
+        """Drain queued NOTIFYs. Returns a list of {channel, payload} dicts.
+
+        base.py only inspects payload['factory_name'] (advisory wake).
+        """
         if not self.connection:
             return []
         try:
@@ -107,92 +121,43 @@ class PostgresProvider:
         return notifications
 
     # =========================================================================
-    # Data fetch helper
+    # Poll scans — plain (updated_at, key) FIFO, no cursor
     # =========================================================================
 
-    def fetch_rows_since(
-        self,
-        collection: str,
-        state: str,
-        cursor: Optional[Tuple],
-    ) -> List[dict]:
-        """Rows in (collection, state) strictly after the composite cursor.
+    def fetch_rows(self, collection: str, state: str) -> List[dict]:
+        """Every row currently in (collection, state), oldest first.
 
-        Used by the 10s safety poll to catch anything LISTEN missed. Cursor
-        is a `(updated_at, key)` tuple — composite to handle equal-timestamp
-        rows correctly (a naive `> updated_at` filter loses rows when two
-        writes share the same timestamp).
-
-        Pass `cursor=None` to fetch every row (used by the startup
-        replay-all path).
+        FIFO = ORDER BY updated_at ASC, key ASC (the order rows entered the
+        state). No cursor: the state itself is the queue — a row still here
+        is still pending; the handler removes it by transitioning/deleting.
         """
         try:
-            base_sql = (
-                "SELECT factory_name, collection, key, user_id, value, state, "
-                "       created_at, updated_at "
-                "FROM factory_data "
-                "WHERE factory_name = %s AND collection = %s AND state = %s"
+            self.cursor.execute(
+                """SELECT factory_name, collection, key, user_id, value, state,
+                          created_at, updated_at
+                   FROM factory_data
+                   WHERE factory_name = %s AND collection = %s AND state = %s
+                   ORDER BY updated_at ASC, key ASC""",
+                (self._factory_name, collection, state),
             )
-            order_sql = " ORDER BY updated_at ASC, key ASC"
-
-            if cursor is None:
-                self.cursor.execute(
-                    base_sql + order_sql,
-                    (self._factory_name, collection, state),
-                )
-            else:
-                cursor_ts, cursor_key = cursor
-                self.cursor.execute(
-                    base_sql + " AND (updated_at, key) > (%s, %s)" + order_sql,
-                    (self._factory_name, collection, state, cursor_ts, cursor_key),
-                )
-
-            rows = self.cursor.fetchall()
-            out = []
-            for row in rows:
-                raw = row[4]
-                if raw is None:
-                    payload = {}
-                elif isinstance(raw, dict):
-                    payload = raw
-                else:
-                    try:
-                        payload = json.loads(raw)
-                    except Exception:
-                        payload = {}
-                out.append({
-                    'factory_name': row[0],
-                    'collection':   row[1],
-                    'key':          row[2],
-                    'user_id':      row[3],
-                    'data':         payload,
-                    'state':        row[5],
-                    'created_at':   row[6],
-                    'updated_at':   row[7],
-                })
-            return out
+            return [_row_to_item(r) for r in self.cursor.fetchall()]
         except Exception as e:
-            log_error(f"fetch_rows_since failed for {collection}.{state}: {e}")
+            log_error(f"fetch_rows failed for {collection}.{state}: {e}")
             return []
 
     def fetch_due_rows(
         self,
         collection: str,
         state: str,
-        cursor: Tuple,
         delay_seconds: float,
     ) -> List[dict]:
-        """Rows due for delayed dispatch.
+        """Rows in (collection, state) whose delay has elapsed.
 
-        Filters on:
-          state = $state                      — strict cancellation
-          (updated_at, key) > cursor          — no re-fire (per-handler cursor)
-          updated_at + delay_seconds <= NOW() — the delay floor
-
-        Composite cursor + ASC ordering match `fetch_rows_since`.
+        Adds `updated_at + delay_seconds <= NOW()` to fetch_rows. The delay
+        is a pure predicate — no cursor. Strict cancellation: if the row
+        left the state it simply isn't returned.
         """
         try:
-            cursor_ts, cursor_key = cursor
             self.cursor.execute(
                 """SELECT factory_name, collection, key, user_id, value, state,
                           created_at, updated_at
@@ -200,78 +165,11 @@ class PostgresProvider:
                    WHERE factory_name = %s
                      AND collection   = %s
                      AND state        = %s
-                     AND (updated_at, key) > (%s, %s)
                      AND updated_at + (%s * INTERVAL '1 second') <= NOW()
                    ORDER BY updated_at ASC, key ASC""",
-                (
-                    self._factory_name,
-                    collection,
-                    state,
-                    cursor_ts,
-                    cursor_key,
-                    float(delay_seconds),
-                ),
+                (self._factory_name, collection, state, float(delay_seconds)),
             )
-            rows = self.cursor.fetchall()
-            out = []
-            for row in rows:
-                raw = row[4]
-                if raw is None:
-                    payload = {}
-                elif isinstance(raw, dict):
-                    payload = raw
-                else:
-                    try:
-                        payload = json.loads(raw)
-                    except Exception:
-                        payload = {}
-                out.append({
-                    'factory_name': row[0],
-                    'collection':   row[1],
-                    'key':          row[2],
-                    'user_id':      row[3],
-                    'data':         payload,
-                    'state':        row[5],
-                    'created_at':   row[6],
-                    'updated_at':   row[7],
-                })
-            return out
+            return [_row_to_item(r) for r in self.cursor.fetchall()]
         except Exception as e:
             log_error(f"fetch_due_rows failed for {collection}.{state}: {e}")
             return []
-
-    def fetch_item(self, factory_name: str, collection: str, key: str) -> Optional[dict]:
-        """Fetch a single factory_data row as a full item dict."""
-        try:
-            self.cursor.execute(
-                """SELECT factory_name, collection, key, user_id, value, state, created_at, updated_at
-                   FROM factory_data
-                   WHERE factory_name = %s AND collection = %s AND key = %s""",
-                (factory_name, collection, key)
-            )
-            row = self.cursor.fetchone()
-            if not row:
-                return None
-            raw = row[4]
-            if raw is None:
-                payload = {}
-            elif isinstance(raw, dict):
-                payload = raw
-            else:
-                try:
-                    payload = json.loads(raw)
-                except Exception:
-                    payload = {}
-            return {
-                'factory_name': row[0],
-                'collection':   row[1],
-                'key':          row[2],
-                'user_id':      row[3],
-                'data':         payload,
-                'state':        row[5],
-                'created_at':   row[6],
-                'updated_at':   row[7],
-            }
-        except Exception as e:
-            log_error(f"fetch_item failed: {e}")
-            return None
