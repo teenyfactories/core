@@ -1,0 +1,72 @@
+# Publish the teenyfactories npm placeholder package.
+#
+# Triggers ONLY when a push to main changes something under nodejs/ —
+# native workflow-level path filtering, no detect job, no git diff. The
+# npm package lives entirely in nodejs/, so a push that doesn't touch it
+# never starts this workflow (no version burned).
+#
+# Standalone by design: GitHub `needs:` can't span workflows, so this does
+# NOT gate on the Python license checks in on_push.yml. The package is a
+# placeholder shell today; revisit if it grows real shipped code.
+#
+# Date-based semver pre-release: 0.1.0-dev.YYYYMMDD (UTC), published under
+# the `dev` dist-tag so `npm install teenyfactories` (default `latest`)
+# returns "no matching version" until a real release lands; opt in with
+# `npm install teenyfactories@dev`. Idempotent — skips if today's version
+# is already published. Requires the `NPM_TOKEN` repo secret.
+
+name: publish-npm
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'nodejs/**'
+
+jobs:
+  publish-npm:
+    name: publish (npm, 0.1.0-dev.YYYYMMDD)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Compute date-based version
+        id: version
+        run: |
+          VERSION="0.1.0-dev.$(date -u +%Y%m%d)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Computed version: $VERSION"
+
+      - name: Check whether version is already on npm
+        id: check
+        working-directory: nodejs
+        run: |
+          EXISTING=$(npm view "teenyfactories@${{ steps.version.outputs.version }}" version 2>/dev/null || true)
+          if [ -n "$EXISTING" ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Version ${{ steps.version.outputs.version }} already on npm — skipping publish."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Version not yet on npm — will publish."
+          fi
+
+      - name: Pin version in package.json
+        if: steps.check.outputs.exists == 'false'
+        working-directory: nodejs
+        run: |
+          npm version "${{ steps.version.outputs.version }}" --no-git-tag-version --allow-same-version
+          node -e "console.log(require('./package.json').version)"
+
+      - name: Publish to npm (dev tag)
+        if: steps.check.outputs.exists == 'false'
+        working-directory: nodejs
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm publish --tag dev --access public
