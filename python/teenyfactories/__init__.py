@@ -60,7 +60,7 @@ from .embedding import embed
 
 # Configuration (factory-visible values only — connection env vars are
 # internal and accessed directly via os.getenv inside the core.)
-from .config import FACTORY_NAME, AGENT_NAME, AGENT_ID
+from .config import FACTORY_NAME, AGENT_NAME, AGENT_SLUG, AGENT_ID
 
 # Scheduling — delegates to the schedule library
 on_schedule = _schedule.default_scheduler
@@ -102,5 +102,5 @@ __all__ = [
     'sleep',
 
     # Configuration
-    'FACTORY_NAME', 'AGENT_NAME', 'AGENT_ID',
+    'FACTORY_NAME', 'AGENT_NAME', 'AGENT_SLUG', 'AGENT_ID',
 ]

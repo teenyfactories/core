@@ -35,7 +35,10 @@ class PostgresLogHandler(logging.Handler):
         self._conn = None
         self._cursor = None
         self._factory_name = _config.FACTORY_NAME
-        self._service_name = _config.AGENT_NAME
+        # service_name is the agent slug (factory.yml agents key) — stable
+        # across display-name renames. Falls back to AGENT_NAME for dev runs
+        # that don't inject AGENT_SLUG.
+        self._service_name = _config.AGENT_SLUG or _config.AGENT_NAME
         self._container_id = _config.AGENT_ID or None
         self._suppress = False  # Set True to skip next emit (used by log_persona)
 
@@ -139,7 +142,9 @@ def log_persona(message: str):
                 if cursor:
                     from .. import config as _config
                     factory = _config.FACTORY_NAME
-                    service = _config.AGENT_NAME
+                    # See PostgresLogHandler.__init__ — slug is canonical,
+                    # AGENT_NAME is the dev-run fallback.
+                    service = _config.AGENT_SLUG or _config.AGENT_NAME
                     container = _config.AGENT_ID or None
 
                     cursor.execute(

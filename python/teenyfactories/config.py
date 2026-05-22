@@ -64,6 +64,13 @@ def require(name: str, hint: str | None = None) -> str:
 FACTORY_NAME = get("FACTORY_NAME", "unknown")
 AGENT_NAME = get("AGENT_NAME", "unknown")
 
+# AGENT_SLUG = the canonical, machine-stable identifier for this agent within
+# its factory (factory.yml agents key). Set by the orchestrator alongside
+# AGENT_NAME. Used as factory_logs.service_name so log queries stay stable
+# when an agent's display name (AGENT_NAME) is edited. Empty string in dev
+# runs that haven't injected it; the logger falls back to AGENT_NAME.
+AGENT_SLUG = get("AGENT_SLUG", "")
+
 # AGENT_ID = the full container hostname. Docker daemon sets HOSTNAME to the
 # container ID at create; Kubernetes sets it to the pod name. Stored on
 # factory_logs.container_id as the per-instance identifier so multiple
