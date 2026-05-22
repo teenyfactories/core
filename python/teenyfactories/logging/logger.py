@@ -14,7 +14,6 @@ into the `factory_logs` PostgreSQL table via `PostgresLogHandler`.
 for first-person speech-bubble rendering.
 """
 
-import json
 import logging
 
 logger = logging.getLogger('teenyfactories')
@@ -90,17 +89,11 @@ class PostgresLogHandler(logging.Handler):
                    VALUES (%s, %s, %s, %s, %s)""",
                 (self._factory_name, self._service_name, self._container_id, level, message)
             )
-
-            notify_payload = json.dumps({
-                'factory_name': self._factory_name,
-                'service_name': self._service_name,
-                'container_id': self._container_id,
-                'level': level,
-                'message': message
-            })
-            if len(notify_payload) > 7900:
-                notify_payload = notify_payload[:7900]
-            cursor.execute('NOTIFY "factory_logs", %s', (notify_payload,))
+            # Realtime broadcast is the trigger's job (notify_factory_logs ON
+            # factory_logs AFTER INSERT, channel tf_logs_changed). The
+            # previous direct NOTIFY "factory_logs" here was dead code — no
+            # listener was ever attached to that channel. Removed 2026-05-22
+            # alongside the orchestrator-side equivalent.
 
         except Exception:
             # Never let logging errors crash the agent.
@@ -154,12 +147,8 @@ def log_persona(message: str):
                            VALUES (%s, %s, %s, %s, %s)""",
                         (factory, service, container, 'persona', message)
                     )
-
-                    notify = json.dumps({
-                        'factory_name': factory, 'service_name': service,
-                        'container_id': container, 'level': 'persona', 'message': message
-                    })
-                    cursor.execute('NOTIFY "factory_logs", %s', (notify[:7900],))
+                    # Trigger handles realtime; see PostgresLogHandler.emit
+                    # above for the dead-NOTIFY history.
                 break
     except Exception:
         pass

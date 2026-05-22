@@ -3,11 +3,13 @@ tf.secrets() — read-only client for the orchestrator's in-built secrets store.
 
 Calls the orchestrator's internal-only secrets endpoint at
 `http://orchestrator:8998/secrets/<KEY>`. The endpoint is reachable only
-from inside the docker network — compose never publishes 8998 to the host.
-Trust is anchored on docker network membership; the orchestrator resolves
-the caller's scope from the source IP. We send X-Factory-Name +
-X-Agent-Name as defence-in-depth so the orchestrator can sanity-check that
-the headers agree with the network-derived scope.
+from inside the private agent network — the orchestrator never publishes
+8998 to the host, regardless of which deployment backend (compose,
+kubernetes, ...) is provisioning the network. Trust is anchored on
+private-network membership; the orchestrator resolves the caller's scope
+from the source IP. We send X-Factory-Name + X-Agent-Name as
+defence-in-depth so the orchestrator can sanity-check that the headers
+agree with the network-derived scope.
 
 Read-only. No `.set` / `.rotate` from agent code — admin UI handles writes.
 

@@ -159,4 +159,11 @@ def require_api_key(provider: str) -> str:
 # Default Ollama base URL — picked to match what works inside Docker
 # containers (host.docker.internal resolves to the Docker host on macOS,
 # Windows, and Linux with --add-host=host.docker.internal:host-gateway).
+#
+# LEGACY: this default is a Docker-Desktop-ism and will not resolve under
+# the kubernetes backend. Decoupling is intentionally deferred to sub-project
+# B PR 3 (the k8s backend ships an alternative — likely a configurable
+# OLLAMA_BASE_URL with no implicit default, or a per-backend default
+# supplied by the orchestrator). Do NOT change this default in isolation;
+# every Docker-based deployment depends on it today.
 OLLAMA_DEFAULT_BASE_URL = "http://host.docker.internal:11434"
