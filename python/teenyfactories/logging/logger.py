@@ -48,18 +48,11 @@ class PostgresLogHandler(logging.Handler):
             return self._cursor
 
         try:
-            import psycopg2
-            import psycopg2.extensions
             from .. import config as _config
 
-            self._conn = psycopg2.connect(
-                host=_config.POSTGRES_HOST,
-                port=_config.POSTGRES_PORT,
-                database=_config.POSTGRES_DB,
-                user=_config.POSTGRES_USER,
-                password=_config.POSTGRES_PASSWORD
-            )
-            self._conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+            # config.connect_postgres() handles psycopg2.connect + isolation level
+            # + RLS scope SET. Single source of truth.
+            self._conn = _config.connect_postgres()
             self._cursor = self._conn.cursor()
             return self._cursor
         except Exception:
