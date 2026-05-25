@@ -93,7 +93,12 @@ def secrets(key_name: str, default=None):
             return value
         return os.getenv(key_name) or default
 
-    if resp.status_code == 404:
+    # 403 / 404 both mean "no secret to read" from the caller's POV:
+    #   404 — orchestrator looked + nothing matched
+    #   403 — orchestrator refused (e.g. anonymous-mode in-built secrets
+    #         endpoint is closed to unauthenticated reads; the route returns
+    #         403 instead of 404). Either way, env-var fallback is correct.
+    if resp.status_code in (403, 404):
         return os.getenv(key_name) or default
 
     if resp.status_code == 503:
