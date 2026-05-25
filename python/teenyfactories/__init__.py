@@ -55,6 +55,9 @@ from .mcp import add_mcp_server, add_mcp_tool
 # Data Collections
 from .collection import collection
 
+# Stepped debugging (no-op when factory debug mode off)
+from .breakpoint import breakpoint
+
 # Embedding
 from .embedding import embed
 
@@ -91,6 +94,9 @@ __all__ = [
 
     # Data Collections
     'collection',
+
+    # Stepped debugging
+    'breakpoint',
 
     # Embedding
     'embed',

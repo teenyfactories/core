@@ -387,6 +387,11 @@ def _dispatch(entries: List[dict], item: dict):
     _evict_strikes()
     attempt = _strikes[rk]
 
+    # Stepped-debug auto-halt. No-op when factory debug mode is off.
+    # _auto_halt blocks until operator clicks Continue (or disables mode).
+    from .. import breakpoint as _bp  # lazy import to break cycle with collection/logger
+    _bp._auto_halt(coll, state, item)
+
     for entry in entries:
         try:
             entry['handler'](item)
