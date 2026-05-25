@@ -99,14 +99,18 @@ def _log_breakpoint(message: str, *, kind: str, **context) -> Optional[int]:
     """
     try:
         conn = config.connect_postgres()
+        # Context first so the canonical halt fields (state/kind/agent_name/
+        # container_id/hit_at) ALWAYS win — _auto_halt passes the dispatch
+        # state under the key `state`, which would otherwise clobber the
+        # 'waiting' halt-state and break the release-poll predicate.
         log_data = {
             '_debug': {
+                **context,
                 'state': 'waiting',
                 'kind': kind,
                 'agent_name': config.AGENT_NAME,
                 'container_id': config.AGENT_ID or None,
                 'hit_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                **context,
             }
         }
         with conn.cursor() as cur:
