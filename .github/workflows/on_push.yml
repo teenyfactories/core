@@ -47,9 +47,9 @@ name: on_push
 
 on:
   pull_request:
-    branches: [main, dev, test]
+    branches: [main, dev, test, cyberrev]
   push:
-    branches: [main, dev, test]
+    branches: [main, dev, test, cyberrev]
 
 env:
   GHCR_IMAGE: ghcr.io/teenyfactories/agent
