@@ -104,14 +104,71 @@ if get("POSTGRES_HOST"):
 
 
 # ── Postgres connection (factory data plane + message queue) ───────────────
+#
+# Naming (2026-05-24, #159): POSTGRES_FACTORY_USER + POSTGRES_FACTORY_PASSWORD
+# are canonical for agent containers. They map to a per-env LOGIN role
+# (tf_<env>_factory) with reduced privileges — no admin schema access, RLS-
+# fenced to this agent's FACTORY_NAME. POSTGRES_USER + POSTGRES_PASSWORD
+# remain as transitional fallback for envs not yet re-keyed; agents fall
+# back if FACTORY_* is unset.
 
 POSTGRES_HOST = get("POSTGRES_HOST", "postgres")
 POSTGRES_PORT = int(get("POSTGRES_PORT", "5432") or "5432")
 POSTGRES_DB = get("POSTGRES_DB", "teenyfactories")
-POSTGRES_USER = get("POSTGRES_USER", "teenyfactories")
+POSTGRES_USER = get("POSTGRES_FACTORY_USER") or get("POSTGRES_USER", "teenyfactories")
 # No default — orchestrator always injects this. Agents started outside
 # the orchestrator must set it explicitly.
-POSTGRES_PASSWORD = require("POSTGRES_PASSWORD", "orchestrator database password") if get("POSTGRES_HOST") else None
+POSTGRES_PASSWORD = (
+    get("POSTGRES_FACTORY_PASSWORD")
+    or (require("POSTGRES_PASSWORD", "orchestrator database password (POSTGRES_FACTORY_PASSWORD or legacy POSTGRES_PASSWORD)") if get("POSTGRES_HOST") else None)
+)
+
+
+# ── Connection helper (single source of truth for psycopg2.connect) ────────
+#
+# Every tf-core code path that opens a psycopg2 connection MUST go through
+# this helper. It sets `app.factory_name` to FACTORY_NAME on the session so
+# the RLS policies on factory_* tables (init_orchestrator.sql, #159) auto-
+# fence reads/writes to this factory's rows only.
+#
+# Fails closed: if FACTORY_NAME is unset OR equal to the dev "unknown"
+# sentinel, the SET is issued honestly (with that value) — the RLS policy
+# then admits no rows (NULL = factory_name is NULL). One-time warn log so
+# dev runs outside the orchestrator surface the cause quickly.
+#
+# Connection lifecycle: agents open ONE long-lived connection per process;
+# no pool, no checkout/release. The SESSION-scoped SET survives until the
+# connection drops + is re-opened, in which case this helper re-SETs.
+_warned_unknown_factory = False
+
+
+def connect_postgres():
+    """Open a psycopg2 connection scoped to this factory via RLS.
+
+    AUTOCOMMIT mode + `SET app.factory_name = FACTORY_NAME` issued once
+    on connect. Caller owns the connection lifecycle.
+    """
+    global _warned_unknown_factory
+    import psycopg2
+    import psycopg2.extensions
+
+    conn = psycopg2.connect(
+        host=POSTGRES_HOST,
+        port=POSTGRES_PORT,
+        database=POSTGRES_DB,
+        user=POSTGRES_USER,
+        password=POSTGRES_PASSWORD,
+    )
+    conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+    with conn.cursor() as cur:
+        cur.execute("SET app.factory_name = %s", (FACTORY_NAME,))
+    if FACTORY_NAME == "unknown" and not _warned_unknown_factory:
+        logging.getLogger("teenyfactories").warning(
+            "RLS scope is 'unknown' — set FACTORY_NAME to your factory's name "
+            "to see real data (RLS policy fences unknown to zero rows)."
+        )
+        _warned_unknown_factory = True
+    return conn
 
 
 # ── LLM provider resolution (mandatory at use-site) ────────────────────────

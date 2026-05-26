@@ -69,15 +69,10 @@ class PostgresProvider:
         if psycopg2 is None:
             raise ImportError("psycopg2 not available — install with 'pip install psycopg2-binary'")
 
-        conn_args = dict(
-            host=config.POSTGRES_HOST,
-            port=config.POSTGRES_PORT,
-            database=config.POSTGRES_DB,
-            user=config.POSTGRES_USER,
-            password=config.POSTGRES_PASSWORD,
-        )
-        self.connection = psycopg2.connect(**conn_args)
-        self.connection.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+        # config.connect_postgres() handles psycopg2.connect + isolation level
+        # + RLS scope SET (app.factory_name = FACTORY_NAME). Single source of
+        # truth — every tf-core connect routes through here.
+        self.connection = config.connect_postgres()
         self.cursor = self.connection.cursor()
 
         log_info(f"Connected to PostgreSQL at {config.POSTGRES_HOST}:{config.POSTGRES_PORT}/{config.POSTGRES_DB}")

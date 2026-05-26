@@ -387,6 +387,14 @@ def _dispatch(entries: List[dict], item: dict):
     _evict_strikes()
     attempt = _strikes[rk]
 
+    # Stepped-debug auto-halt. No-op when factory debug mode is off.
+    # _auto_halt blocks until operator clicks Continue (or disables mode).
+    # Direct submodule import — `teenyfactories.breakpoint` is the public
+    # FUNCTION (re-exported in __init__.py); `teenyfactories.breakpoint_mod`
+    # would be cleaner but we use the explicit submodule path here instead.
+    from ..breakpoint import _auto_halt as _bp_auto_halt
+    _bp_auto_halt(coll, state, item)
+
     for entry in entries:
         try:
             entry['handler'](item)

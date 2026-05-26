@@ -44,17 +44,9 @@ def _get_cursor():
     if not config.get("POSTGRES_HOST"):
         return None
     try:
-        import psycopg2
-        import psycopg2.extensions
-
-        _conn = psycopg2.connect(
-            host=config.POSTGRES_HOST,
-            port=config.POSTGRES_PORT,
-            database=config.POSTGRES_DB,
-            user=config.POSTGRES_USER,
-            password=config.POSTGRES_PASSWORD,
-        )
-        _conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
+        # config.connect_postgres() handles psycopg2.connect + isolation level
+        # + RLS scope SET. Single source of truth.
+        _conn = config.connect_postgres()
         _cursor = _conn.cursor()
         return _cursor
     except Exception as e:
