@@ -67,6 +67,14 @@ data = [
     "pyyaml>=6.0.0",
 ]
 
+# Google Drive / Workspace APIs (content_gatherer, video_transcriber).
+# google-auth is required alongside the client for the service-account flow
+# (`from google.oauth2 import service_account`).
+google-drive = [
+    "google-api-python-client>=2.0.0",
+    "google-auth>=2.0.0",
+]
+
 # Everything
 all = [
     "langchain-openai>=0.0.5",
@@ -78,6 +86,8 @@ all = [
     "psycopg2-binary>=2.9.0",
     "duckdb>=1.0.0",
     "pyyaml>=6.0.0",
+    "google-api-python-client>=2.0.0",
+    "google-auth>=2.0.0",
 ]
 
 # Development dependencies
