@@ -85,6 +85,11 @@ def _load_digitalocean():
     return DigitalOceanProvider()
 
 
+def _load_openrouter():
+    from .providers.openrouter import OpenRouterProvider
+    return OpenRouterProvider()
+
+
 # Single registry — drives both `get_llm_client` and `_get_model_name`.
 # Each value is a zero-arg callable returning a fresh provider instance;
 # the actual provider module is imported lazily on first use so importing
@@ -96,6 +101,7 @@ _PROVIDERS = {
     'ollama':        _load_ollama,
     'azure_bedrock': _load_azure_bedrock,
     'digitalocean':  _load_digitalocean,
+    'openrouter':    _load_openrouter,
 }
 
 
@@ -125,8 +131,8 @@ def get_llm_client(
 
     Args:
         provider:    'openai' / 'anthropic' / 'google' / 'ollama' /
-                     'azure_bedrock' / 'digitalocean'. Defaults to
-                     DEFAULT_LLM_PROVIDER.
+                     'azure_bedrock' / 'digitalocean' / 'openrouter'.
+                     Defaults to DEFAULT_LLM_PROVIDER.
         model:       Optional model override (e.g. 'claude-haiku-4-5-20251001').
                      Defaults to DEFAULT_LLM_MODEL.
         temperature: Optional sampling temperature override. Defaults to the
