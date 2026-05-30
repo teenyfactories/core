@@ -35,7 +35,7 @@ from urllib.parse import quote
 import requests
 
 from .config import FACTORY_NAME, AGENT_NAME
-from .logging import log_warn
+from .logging import log_debug, log_warn, log_error
 
 _DEFAULT_BASE_URL = 'http://orchestrator:8998'
 _TIMEOUT_SECONDS = 2.0
@@ -93,12 +93,19 @@ def secrets(key_name: str, default=None):
             return value
         return os.getenv(key_name) or default
 
-    # 403 / 404 both mean "no secret to read" from the caller's POV:
-    #   404 — orchestrator looked + nothing matched
-    #   403 — orchestrator refused (e.g. anonymous-mode in-built secrets
-    #         endpoint is closed to unauthenticated reads; the route returns
-    #         403 instead of 404). Either way, env-var fallback is correct.
-    if resp.status_code in (403, 404):
+    # 403 = orchestrator refused (no X-Factory-Name header / NetworkPolicy
+    # gate / etc). 404 = scope resolved but no secret stored. Both fall back
+    # to env-or-default from the caller's POV, but 403 is operationally
+    # significant — it means the agent failed to authenticate to the secrets
+    # endpoint and is now running blind. Log at ERROR so operators see it.
+    if resp.status_code == 403:
+        log_error(
+            f"tf.secrets({key_name!r}): orchestrator rejected (403). "
+            f"Falling back to env var / default. Check NetworkPolicy + "
+            f"X-Factory-Name header wiring."
+        )
+        return os.getenv(key_name) or default
+    if resp.status_code == 404:
         return os.getenv(key_name) or default
 
     if resp.status_code == 503:
@@ -111,8 +118,14 @@ def secrets(key_name: str, default=None):
 
 
 def _warn_once(key_name: str, reason: str) -> None:
+    # Transport/HTTP failures are DEBUG, not WARN — they're expected in
+    # standalone (no-orchestrator) mode and harmless in orchestrator-managed
+    # mode when env-var fallback covers it. The final WARN-and-raise lives
+    # upstream in config.require_api_key, which fires only when EVERY cascade
+    # step (factory secret → global secret → orchestrator env → agent env)
+    # came back empty.
     sig = (key_name, reason)
     if sig in _warned:
         return
     _warned.add(sig)
-    log_warn(f'tf.secrets({key_name!r}) failed ({reason}); falling back to env var')
+    log_debug(f'tf.secrets({key_name!r}) HTTP cascade unreachable ({reason}); falling back to env var')

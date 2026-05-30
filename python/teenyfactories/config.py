@@ -179,7 +179,7 @@ def require_llm_provider() -> str:
     is unset; agents never get a silent default."""
     return require(
         "DEFAULT_LLM_PROVIDER",
-        "one of: openai, anthropic, google, ollama, azure_bedrock",
+        "one of: openai, anthropic, google, ollama, azure_bedrock, digitalocean",
     )
 
 
@@ -208,6 +208,7 @@ def require_api_key(provider: str) -> str:
         "google": "GOOGLE_API_KEY",
         "ollama": "OLLAMA_BASE_URL",
         "azure_bedrock": "AZURE_BEDROCK_LLM_KEY",
+        "digitalocean": "DIGITALOCEAN_API_KEY",
     }.get(provider)
     if not var_name:
         raise RuntimeError(f"Unknown LLM provider '{provider}'")

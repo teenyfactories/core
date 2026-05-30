@@ -137,13 +137,10 @@ jobs:
           echo "sha=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
           echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
 
-      # QEMU lets the amd64 GitHub runner build arm64 images. Slow vs native
-      # (3–10× depending on workload) but free.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
-
+      # TEMP (2026-05-30): single-arch builds for dev speed. arm64 cross-build
+      # via QEMU is 3-10x slower than native amd64. Restore arm64 by adding
+      # back the QEMU step + `linux/amd64,linux/arm64` platforms when ready
+      # to ship multi-arch again.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -161,14 +158,12 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      # Single buildx invocation: builds amd64 + arm64, produces a manifest
-      # list, pushes the same digest under tags on both registries.
-      - name: Build + push (linux/amd64, linux/arm64)
+      - name: Build + push (linux/amd64)
         uses: docker/build-push-action@v6
         with:
           context: ./python
           file: ./python/Dockerfile.build
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: |
             ${{ env.GHCR_IMAGE }}:${{ steps.tag.outputs.tag }}
