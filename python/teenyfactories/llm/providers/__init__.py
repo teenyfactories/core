@@ -6,6 +6,7 @@ from .google import GoogleProvider
 from .ollama import OllamaProvider
 from .azure_bedrock import AzureBedrockProvider
 from .digitalocean import DigitalOceanProvider
+from .openrouter import OpenRouterProvider
 
 __all__ = [
     'OpenAIProvider',
@@ -14,4 +15,5 @@ __all__ = [
     'OllamaProvider',
     'AzureBedrockProvider',
     'DigitalOceanProvider',
+    'OpenRouterProvider',
 ]
