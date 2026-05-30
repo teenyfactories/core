@@ -5,6 +5,7 @@ from .anthropic import AnthropicProvider
 from .google import GoogleProvider
 from .ollama import OllamaProvider
 from .azure_bedrock import AzureBedrockProvider
+from .digitalocean import DigitalOceanProvider
 
 __all__ = [
     'OpenAIProvider',
@@ -12,4 +13,5 @@ __all__ = [
     'GoogleProvider',
     'OllamaProvider',
     'AzureBedrockProvider',
+    'DigitalOceanProvider',
 ]

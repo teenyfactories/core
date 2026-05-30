@@ -29,7 +29,6 @@ Usage:
         tf.sleep(1)
 """
 
-import time as _time
 import schedule as _schedule
 
 from .__version__ import __version__
@@ -48,6 +47,10 @@ from .secrets import secrets
 
 # Message Queue
 from .message_queue import on_state, run_pending
+
+# Lifecycle — graceful shutdown on SIGTERM/SIGINT, transparently wired
+# through `tf.run_pending()` and `tf.sleep()`.
+from .lifecycle import sleep, shutting_down
 
 # MCP Tools
 from .mcp import add_mcp_server, add_mcp_tool
@@ -100,9 +103,6 @@ def _patched_schedule_do(self, job_func, *args, **kwargs):
 
 _schedule.Job.do = _patched_schedule_do
 
-# Sleep — so scripts only need `import teenyfactories as tf`
-sleep = _time.sleep
-
 __all__ = [
     '__version__',
 
@@ -136,8 +136,8 @@ __all__ = [
     # Scheduling
     'on_schedule',
 
-    # Sleep
-    'sleep',
+    # Lifecycle (sleep wakes on SIGTERM/SIGINT)
+    'sleep', 'shutting_down',
 
     # Configuration
     'FACTORY_NAME', 'AGENT_NAME', 'AGENT_SLUG', 'AGENT_ID',

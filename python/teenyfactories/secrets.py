@@ -35,7 +35,7 @@ from urllib.parse import quote
 import requests
 
 from .config import FACTORY_NAME, AGENT_NAME
-from .logging import log_warn, log_error
+from .logging import log_debug, log_warn, log_error
 
 _DEFAULT_BASE_URL = 'http://orchestrator:8998'
 _TIMEOUT_SECONDS = 2.0
@@ -118,8 +118,14 @@ def secrets(key_name: str, default=None):
 
 
 def _warn_once(key_name: str, reason: str) -> None:
+    # Transport/HTTP failures are DEBUG, not WARN — they're expected in
+    # standalone (no-orchestrator) mode and harmless in orchestrator-managed
+    # mode when env-var fallback covers it. The final WARN-and-raise lives
+    # upstream in config.require_api_key, which fires only when EVERY cascade
+    # step (factory secret → global secret → orchestrator env → agent env)
+    # came back empty.
     sig = (key_name, reason)
     if sig in _warned:
         return
     _warned.add(sig)
-    log_warn(f'tf.secrets({key_name!r}) failed ({reason}); falling back to env var')
+    log_debug(f'tf.secrets({key_name!r}) HTTP cascade unreachable ({reason}); falling back to env var')
