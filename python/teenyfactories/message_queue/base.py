@@ -37,8 +37,9 @@ Transport:
     own-factory NOTIFY was drained this tick, OR ``_SAFETY_POLL_INTERVAL_SEC``
     has elapsed since the last poll, OR it is the first tick. Otherwise
     ``run_pending()`` issues zero queries.
-  * ``tf.sleep`` is never touched by core. Observed latency is the factory
-    author's own ``tf.sleep(N)`` loop cadence.
+  * ``tf.sleep`` is a chunked wrapper around ``time.sleep`` that wakes on
+    SIGTERM/SIGINT (slice ≈ 100 ms). Observed dispatch latency is still
+    the factory author's own ``tf.sleep(N)`` loop cadence.
 
 Lifecycle:
     1. Factory module imports tf and decorates handlers. Registrations are
@@ -56,6 +57,10 @@ from typing import Callable, Dict, List
 import schedule as _schedule
 
 from teenyfactories.config import FACTORY_NAME
+from teenyfactories.lifecycle import (
+    exit_if_shutting_down as _exit_if_shutting_down,
+    install_signal_handlers as _install_signal_handlers,
+)
 from teenyfactories.logging import log_info, log_warn, log_error
 
 
@@ -289,13 +294,19 @@ def run_pending():
             tf.run_pending()
             tf.sleep(1)
 
-    `tf.sleep` is a plain blocking sleep — core never modifies it. NOTIFYs
-    that arrive during the sleep buffer on the connection and are observed
-    on the next tick. A poll runs only when an own-factory NOTIFY was
-    drained, OR _SAFETY_POLL_INTERVAL_SEC has elapsed, OR it is the first
-    tick. Otherwise this issues zero queries.
+    `tf.sleep` wakes on SIGTERM/SIGINT (chunked under the hood); SIGTERM
+    + SIGINT handlers are installed on the first call here. When a signal
+    arrives the flag is observed at the end of this function and at the
+    next `tf.sleep` slice, raising SystemExit(0) for clean teardown.
+
+    A poll runs only when an own-factory NOTIFY was drained, OR
+    _SAFETY_POLL_INTERVAL_SEC has elapsed, OR it is the first tick.
+    Otherwise this issues zero queries.
     """
     global _last_poll_ts
+
+    # Idempotent — only the first call actually registers the signals.
+    _install_signal_handlers()
 
     first = not _initialized
     if not _initialized:
@@ -329,6 +340,12 @@ def run_pending():
         except Exception as e:
             log_error(f"Poll pass raised: {e}\n{_tb.format_exc()}")
         _last_poll_ts = time.monotonic()
+
+    # SIGTERM/SIGINT received during this tick? Raise SystemExit now so
+    # the user's `while True` exits cleanly via Python's normal teardown
+    # (atexit hooks, finalisers). The next `tf.sleep` slice would catch
+    # it too, but exiting here is more responsive.
+    _exit_if_shutting_down()
 
 
 # =============================================================================
