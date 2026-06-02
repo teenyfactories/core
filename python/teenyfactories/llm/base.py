@@ -36,7 +36,7 @@ except ImportError:
     T = TypeVar('T')
 
 from teenyfactories import config
-from teenyfactories.logging import log_info, log_error, log_debug, log_warn
+from teenyfactories.logging import log_error, log_debug, log_warn
 
 
 # =============================================================================
@@ -216,7 +216,7 @@ def _prepare_prompt(prompt_template, prompt_inputs, response_model):
 def _invoke_chain(prompt_template, llm, prompt_inputs):
     """Run `template | llm` and return (raw_result, response_text)."""
     chain = prompt_template | llm
-    log_info("💬 Calling LLM")
+    log_debug("💬 Calling LLM")
     result = chain.invoke(prompt_inputs)
     text = result.content if hasattr(result, 'content') else str(result)
     return result, text
@@ -230,8 +230,8 @@ def _parse_response(response_text: str, parser, response_model):
     try:
         return parser.parse(response_text)
     except ValidationError as ve:
-        log_warn(f"⚠️ Pydantic validation error: {ve}")
-        log_info(f"🔍 Raw response text that failed validation: {response_text[:500]}...")
+        log_debug(f"💬 Pydantic validation error (will retry via regex extract): {ve}")
+        log_debug(f"💬 LLM raw response that failed strict parse: {response_text[:500]}")
 
     match = re.search(r'\{.*\}', response_text, re.DOTALL)
     if not match:
@@ -241,11 +241,10 @@ def _parse_response(response_text: str, parser, response_model):
         )
 
     try:
-        log_info(f"🔍 Extracted JSON for retry: {match.group(0)[:200]}...")
+        log_debug(f"💬 Extracted JSON from LLM result: {match.group(0)[:200]}")
         return response_model.model_validate_json(match.group(0))
     except Exception as parse_err:
-        log_error(f"❌ Failed to parse response: {parse_err}")
-        log_info(f"🔍 Final failed response text: {response_text[:300]}...")
+        log_error(f"💬 Failed to parse LLM response: {parse_err} (response: {response_text[:300]})")
         raise Exception(
             f"Failed to parse LLM response with {response_model.__name__}: {parse_err}"
         )
@@ -298,7 +297,7 @@ def _record_call_usage(*, provider, model, token_info, duration_ms,
     except Exception as usage_err:
         # log_usage already swallows internally; this only fires if the
         # import itself blows up.
-        log_warn(f"⚠️ usage_recorder unavailable: {usage_err}")
+        log_warn(f"💬 LLM usage_recorder unavailable: {usage_err}")
 
 
 # =============================================================================
@@ -361,7 +360,7 @@ def call_llm(
         if response_model is not None:
             response_text = clean_json_response(response_text)
             result_value = _parse_response(response_text, parser, response_model)
-            log_debug(f"✅ Successfully parsed response with {response_model.__name__}")
+            log_debug(f"💬 LLM response parsed into {response_model.__name__}")
         else:
             result_value = response_text
 
@@ -370,11 +369,11 @@ def call_llm(
 
     except Exception as e:
         error_message = str(e)
-        log_error(f"❌ LLM call failed: {error_message}")
+        log_error(f"💬 LLM call failed: {error_message}")
 
     finally:
         duration_ms = int((time.time() - start_time) * 1000)
-        log_debug(f"📊 LLM Usage: {used_provider}/{used_model} - {duration_ms}ms")
+        log_debug(f"💬 LLM usage: {used_provider}/{used_model} {duration_ms}ms")
         _record_call_usage(
             provider=used_provider,
             model=used_model,

@@ -61,7 +61,7 @@ from teenyfactories.lifecycle import (
     exit_if_shutting_down as _exit_if_shutting_down,
     install_signal_handlers as _install_signal_handlers,
 )
-from teenyfactories.logging import log_info, log_warn, log_error
+from teenyfactories.logging import log_debug, log_info, log_warn, log_error
 
 
 # =============================================================================
@@ -119,7 +119,7 @@ def _get_provider():
         from .providers.postgres import PostgresProvider
         _provider_instance = PostgresProvider()
         _provider_instance.connect()
-        log_info("Connected to PostgreSQL message queue")
+        # PostgresProvider.connect() already logs the host/db; no second line.
     return _provider_instance
 
 
@@ -239,7 +239,7 @@ def _flush_registrations():
             'handler':       reg['handler'],
             'delay_seconds': delay_seconds,
         })
-        log_info(
+        log_debug(
             f"Registered handler for {coll}.{state} (delay_seconds={delay_seconds})"
         )
 
@@ -271,13 +271,14 @@ def _first_tick_init():
 
 
 def _log_startup_banner():
-    """Single-line provenance banner at first run_pending()."""
+    """Single-line provenance banner at first run_pending(). Debug-level —
+    operators don't normally need this; surfaces under --log-level=debug."""
     try:
         from teenyfactories.__version__ import (
             __version__, __build_sha__, __build_date__,
         )
         from teenyfactories.config import FACTORY_NAME, AGENT_NAME
-        log_info(
+        log_debug(
             f"teenyfactories {__version__} "
             f"(build {__build_sha__} {__build_date__}) — "
             f"agent={AGENT_NAME!r} factory={FACTORY_NAME!r}"

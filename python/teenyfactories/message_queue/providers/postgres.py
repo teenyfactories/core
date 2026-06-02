@@ -22,7 +22,7 @@ except ImportError:
     psycopg2 = None
 
 from teenyfactories import config
-from teenyfactories.logging import log_info, log_error
+from teenyfactories.logging import log_debug, log_error
 
 
 # Single global wake channel. Emitted by the factory_data NOTIFY trigger
@@ -75,7 +75,7 @@ class PostgresProvider:
         self.connection = config.connect_postgres()
         self.cursor = self.connection.cursor()
 
-        log_info(f"Connected to PostgreSQL at {config.POSTGRES_HOST}:{config.POSTGRES_PORT}/{config.POSTGRES_DB}")
+        log_debug(f"Connected to PostgreSQL at {config.POSTGRES_HOST}:{config.POSTGRES_PORT}/{config.POSTGRES_DB}")
 
     # =========================================================================
     # LISTEN / NOTIFY (wake only)
@@ -88,7 +88,7 @@ class PostgresProvider:
         # Quote identifier — channel may contain underscores.
         self.cursor.execute(f'LISTEN "{channel}"')
         self._listening.add(channel)
-        log_info(f"LISTEN on channel: {channel}")
+        log_debug(f"LISTEN on channel: {channel}")
 
     def poll_notifications(self) -> List[dict]:
         """Drain queued NOTIFYs. Returns a list of {channel, payload} dicts.
