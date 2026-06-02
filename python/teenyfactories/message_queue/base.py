@@ -61,7 +61,7 @@ from teenyfactories.lifecycle import (
     exit_if_shutting_down as _exit_if_shutting_down,
     install_signal_handlers as _install_signal_handlers,
 )
-from teenyfactories.logging import log_info, log_warn, log_error
+from teenyfactories.logging import log_debug, log_info, log_warn, log_error
 
 
 # =============================================================================
@@ -119,7 +119,7 @@ def _get_provider():
         from .providers.postgres import PostgresProvider
         _provider_instance = PostgresProvider()
         _provider_instance.connect()
-        log_info("Connected to PostgreSQL message queue")
+        # PostgresProvider.connect() already logs the host/db; no second line.
     return _provider_instance
 
 
@@ -130,22 +130,33 @@ def _get_provider():
 class SubscriptionBuilder:
     """Fluent builder for tf.on_state(...).
 
-    Two shapes:
+    Three optional chain modifiers, any order:
         @tf.on_state(collection, state).do(handler)
         @tf.on_state(collection, state).delay(seconds=N).do(handler)
+        @tf.on_state(collection, state).claim_duration(hours=2).do(handler)
+        @tf.on_state(collection, state).delay(seconds=5).claim_duration(minutes=30).do(handler)
 
     `.delay(seconds=N, minutes=N, hours=N)` defers dispatch until
-    `updated_at + delta <= NOW()`. Strict cancellation — if the row leaves
-    the watched state before the delay elapses it is never dispatched.
-    Re-arm — a transition out and back in bumps `updated_at` and restarts
-    the delay. Granularity is the `tf.run_pending()` cadence. Time units
-    are additive: `.delay(seconds=30, minutes=2)` → 2m30s.
+    `state_changed_at + delta <= NOW()`. Strict cancellation — if the row
+    leaves the watched state before the delay elapses it is never
+    dispatched. Re-arm — a transition out and back in bumps state_changed_at
+    and restarts the delay. Granularity is the `tf.run_pending()` cadence.
+    Time units are additive: `.delay(seconds=30, minutes=2)` → 2m30s.
+
+    `.claim_duration(seconds=N | minutes=N | hours=N)` — how long this
+    subscription's claim on a row remains valid. If the worker dies mid-
+    handler, the claim expires after this duration and another worker can
+    pick the row up. Default 1 hour. Set smaller for tight crash recovery
+    (accepts double-fire risk for fast retry); larger for handlers that
+    legitimately run longer.
     """
 
     def __init__(self, collection: str, state: str):
+        from ..claims import DEFAULT_CLAIM_DURATION_SECONDS
         self._collection = collection
         self._state = state
         self._delay_seconds: float = 0.0
+        self._claim_duration_seconds: float = DEFAULT_CLAIM_DURATION_SECONDS
 
     def delay(self, seconds: float = 0, minutes: float = 0, hours: float = 0):
         delta = float(seconds) + float(minutes) * 60.0 + float(hours) * 3600.0
@@ -154,12 +165,20 @@ class SubscriptionBuilder:
         self._delay_seconds = delta
         return self
 
+    def claim_duration(self, seconds: float = 0, minutes: float = 0, hours: float = 0):
+        delta = float(seconds) + float(minutes) * 60.0 + float(hours) * 3600.0
+        if delta <= 0:
+            raise ValueError(f"claim_duration must be positive, got {delta}")
+        self._claim_duration_seconds = delta
+        return self
+
     def do(self, handler: Callable):
         _enqueue_registration(
             collection=self._collection,
             state=self._state,
             handler=handler,
             delay_seconds=self._delay_seconds,
+            claim_duration_seconds=self._claim_duration_seconds,
         )
         return handler
 
@@ -189,14 +208,16 @@ def on_state(collection: str, state: str) -> SubscriptionBuilder:
 # =============================================================================
 
 def _enqueue_registration(collection: str, state: str, handler: Callable,
-                          delay_seconds: float = 0.0):
+                          delay_seconds: float = 0.0,
+                          claim_duration_seconds: float = 3600.0):
     """Queue a subscription. The LISTEN + handler-table insertion happens
     later, from inside the run_pending lifecycle (`_flush_registrations`)."""
     _pending_registrations.append({
-        'collection':    collection,
-        'state':         state,
-        'handler':       handler,
-        'delay_seconds': delay_seconds,
+        'collection':              collection,
+        'state':                   state,
+        'handler':                 handler,
+        'delay_seconds':           delay_seconds,
+        'claim_duration_seconds':  claim_duration_seconds,
     })
 
 
@@ -236,10 +257,11 @@ def _flush_registrations():
             )
 
         _handlers.setdefault(key, []).append({
-            'handler':       reg['handler'],
-            'delay_seconds': delay_seconds,
+            'handler':                reg['handler'],
+            'delay_seconds':          delay_seconds,
+            'claim_duration_seconds': reg.get('claim_duration_seconds') or 3600.0,
         })
-        log_info(
+        log_debug(
             f"Registered handler for {coll}.{state} (delay_seconds={delay_seconds})"
         )
 
@@ -271,13 +293,14 @@ def _first_tick_init():
 
 
 def _log_startup_banner():
-    """Single-line provenance banner at first run_pending()."""
+    """Single-line provenance banner at first run_pending(). Debug-level —
+    operators don't normally need this; surfaces under --log-level=debug."""
     try:
         from teenyfactories.__version__ import (
             __version__, __build_sha__, __build_date__,
         )
         from teenyfactories.config import FACTORY_NAME, AGENT_NAME
-        log_info(
+        log_debug(
             f"teenyfactories {__version__} "
             f"(build {__build_sha__} {__build_date__}) — "
             f"agent={AGENT_NAME!r} factory={FACTORY_NAME!r}"
@@ -340,6 +363,17 @@ def run_pending():
         except Exception as e:
             log_error(f"Poll pass raised: {e}\n{_tb.format_exc()}")
         _last_poll_ts = time.monotonic()
+
+    # Claim janitor — reap stale claims past their lease_expires_at. No-op
+    # fast-path when the 30s interval hasn't elapsed. RLS auto-scopes to
+    # the caller's factory; concurrent sweeps from sibling pods are
+    # idempotent. NOTIFYs after a reap so polling workers wake to re-pick
+    # rows whose holders died.
+    try:
+        from ..claims import janitor_sweep_if_due
+        janitor_sweep_if_due()
+    except Exception as e:
+        log_error(f"Claim janitor raised: {e}\n{_tb.format_exc()}")
 
     # SIGTERM/SIGINT received during this tick? Raise SystemExit now so
     # the user's `while True` exits cleanly via Python's normal teardown
@@ -412,7 +446,22 @@ def _dispatch(entries: List[dict], item: dict):
     from ..breakpoint import _auto_halt as _bp_auto_halt
     _bp_auto_halt(coll, state, item)
 
+    # Atomic claim wrap — guards against double-fire from replicas / orphan
+    # pods / rolling-restart races. Always-on (not env-gated). For details
+    # see core/python/teenyfactories/claims.py.
+    from ..claims import try_claim, release_claim
+    row_key = item.get('key')
+    sca = item.get('state_changed_at')
+
     for entry in entries:
+        ttl = entry.get('claim_duration_seconds') or 3600.0
+        if not try_claim(coll, row_key, state, sca, ttl):
+            # Another worker (replica/orphan/zombie) holds the claim. Silently
+            # skip — don't strike-count, because we didn't actually attempt the
+            # handler. The other worker will or won't transition the row; if
+            # it doesn't, we'll see the row again on next poll and try-claim
+            # afresh (claim row gone after their release, or expired via janitor).
+            continue
         try:
             entry['handler'](item)
         except Exception as e:
@@ -421,6 +470,8 @@ def _dispatch(entries: List[dict], item: dict):
                 f"Handler {coll}.{state} failed on key={rk[0]!r} "
                 f"attempt {attempt}/{_MAX_ATTEMPTS}: {e}"
             )
+        finally:
+            release_claim(coll, row_key, state, sca)
 
 
 # =============================================================================
