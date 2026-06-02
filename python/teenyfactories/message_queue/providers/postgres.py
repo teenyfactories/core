@@ -44,14 +44,15 @@ def _row_to_item(row) -> dict:
         except Exception:
             payload = {}
     return {
-        'factory_name': row[0],
-        'collection':   row[1],
-        'key':          row[2],
-        'user_id':      row[3],
-        'data':         payload,
-        'state':        row[5],
-        'created_at':   row[6],
-        'updated_at':   row[7],
+        'factory_name':     row[0],
+        'collection':       row[1],
+        'key':              row[2],
+        'user_id':          row[3],
+        'data':             payload,
+        'state':            row[5],
+        'created_at':       row[6],
+        'updated_at':       row[7],
+        'state_changed_at': row[8],
     }
 
 
@@ -122,17 +123,20 @@ class PostgresProvider:
     def fetch_rows(self, collection: str, state: str) -> List[dict]:
         """Every row currently in (collection, state), oldest first.
 
-        FIFO = ORDER BY updated_at ASC, key ASC (the order rows entered the
-        state). No cursor: the state itself is the queue — a row still here
-        is still pending; the handler removes it by transitioning/deleting.
+        FIFO = ORDER BY state_changed_at ASC, key ASC (the order rows entered
+        this state — the previous `updated_at` ordering would re-shuffle a
+        row whose value got updated without a state change, contradicting
+        the queue-arrival intuition). No cursor: the state itself is the
+        queue — a row still here is still pending; the handler removes it
+        by transitioning/deleting.
         """
         try:
             self.cursor.execute(
                 """SELECT factory_name, collection, key, user_id, value, state,
-                          created_at, updated_at
+                          created_at, updated_at, state_changed_at
                    FROM factory_data
                    WHERE factory_name = %s AND collection = %s AND state = %s
-                   ORDER BY updated_at ASC, key ASC""",
+                   ORDER BY state_changed_at ASC, key ASC""",
                 (self._factory_name, collection, state),
             )
             return [_row_to_item(r) for r in self.cursor.fetchall()]
@@ -148,20 +152,22 @@ class PostgresProvider:
     ) -> List[dict]:
         """Rows in (collection, state) whose delay has elapsed.
 
-        Adds `updated_at + delay_seconds <= NOW()` to fetch_rows. The delay
-        is a pure predicate — no cursor. Strict cancellation: if the row
-        left the state it simply isn't returned.
+        Adds `state_changed_at + delay_seconds <= NOW()` to fetch_rows. The
+        delay clock measures time-since-state-entry, NOT time-since-last-
+        touch — so an in-flight value update on a same-state row doesn't
+        reset the delay. The delay is a pure predicate — no cursor. Strict
+        cancellation: if the row left the state it simply isn't returned.
         """
         try:
             self.cursor.execute(
                 """SELECT factory_name, collection, key, user_id, value, state,
-                          created_at, updated_at
+                          created_at, updated_at, state_changed_at
                    FROM factory_data
                    WHERE factory_name = %s
                      AND collection   = %s
                      AND state        = %s
-                     AND updated_at + (%s * INTERVAL '1 second') <= NOW()
-                   ORDER BY updated_at ASC, key ASC""",
+                     AND state_changed_at + (%s * INTERVAL '1 second') <= NOW()
+                   ORDER BY state_changed_at ASC, key ASC""",
                 (self._factory_name, collection, state, float(delay_seconds)),
             )
             return [_row_to_item(r) for r in self.cursor.fetchall()]
