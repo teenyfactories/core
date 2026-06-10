@@ -113,13 +113,15 @@ _initialized = False
 
 
 def _get_provider():
-    """Get or create the PostgreSQL provider instance."""
+    """Get or create the PostgreSQL provider instance.
+
+    No connect here — the provider rides the shared connection in
+    ``teenyfactories.db``, opened lazily by whoever touches the DB first.
+    """
     global _provider_instance
     if _provider_instance is None:
         from .providers.postgres import PostgresProvider
         _provider_instance = PostgresProvider()
-        _provider_instance.connect()
-        # PostgresProvider.connect() already logs the host/db; no second line.
     return _provider_instance
 
 

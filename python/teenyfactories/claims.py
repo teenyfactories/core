@@ -32,7 +32,7 @@ import os
 import time
 from datetime import datetime, timezone
 
-from . import config
+from . import config, db
 from .logging import log_debug, log_warn
 
 
@@ -94,10 +94,9 @@ def hash_claim_key(collection: str, key: str, state: str, state_changed_at) -> s
 # ── DB ops ─────────────────────────────────────────────────────────────────
 
 def _claim_cursor():
-    """Use the message-queue provider's existing connection/cursor. Same
-    connection the dispatcher already owns; no additional DB slots used."""
-    from .message_queue.base import _get_provider
-    return _get_provider().cursor
+    """Fresh cursor on the process-wide shared connection (teenyfactories.db).
+    Same connection the dispatcher rides; no additional DB slots used."""
+    return db.cursor()
 
 
 def try_claim(collection: str, key: str, state: str, state_changed_at,
@@ -178,6 +177,7 @@ def try_claim(collection: str, key: str, state: str, state_changed_at,
     except Exception as e:
         # Fail-closed: if the claim system is broken, skip the handler.
         # Better to halt than double-fire. Operator notices via logs.
+        db.invalidate_if_dead(e)
         log_warn(
             f"claim INSERT failed for {collection}/{key} state={state}: {e} "
             f"— skipping handler to avoid potential double-fire"
@@ -206,6 +206,7 @@ def release_claim(collection: str, key: str, state: str, state_changed_at) -> No
         )
     except Exception as e:
         # Release failure is not fatal — janitor will reap on TTL.
+        db.invalidate_if_dead(e)
         log_warn(
             f"claim DELETE failed for {collection}/{key} state={state}: {e} "
             f"— janitor will reap on lease expiry"
@@ -250,6 +251,7 @@ def janitor_sweep_if_due() -> None:
         # listens on.
         cursor.execute('NOTIFY tf_data_changed')
     except Exception as e:
+        db.invalidate_if_dead(e)
         log_warn(f"janitor sweep failed (will retry on next tick): {e}")
 
 
