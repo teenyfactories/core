@@ -11,21 +11,18 @@ Design mirrors orchestrator/backend/services/usageRecorder.js:
   - This is internal-only: factory authors don't call it directly. The
     framework records on their behalf from tf.call_llm and tf.embed.
 
-Connection model: a dedicated, lazy, autocommit psycopg2 connection — same
-shape as PostgresLogHandler. Kept off the message_queue provider's
-transactional cursor so a usage write can never disrupt pub/sub state.
+Connection model: rides the process-wide shared connection
+(`teenyfactories.db`) with a fresh cursor per write. Everything is
+AUTOCOMMIT single-statement, so sharing cannot disrupt pub/sub state.
 """
 
 from typing import Optional
 
-from . import config
+from . import config, db
 from .logging import log_warn
 
 _PREVIEW_LEN = 80
 _VALID_KINDS = ('llm', 'embedding')
-
-_conn = None
-_cursor = None
 
 
 def _preview_of(text) -> Optional[str]:
@@ -34,26 +31,6 @@ def _preview_of(text) -> Optional[str]:
         return None
     s = text if isinstance(text, str) else str(text)
     return s[:_PREVIEW_LEN] if len(s) > _PREVIEW_LEN else s
-
-
-def _get_cursor():
-    """Lazy autocommit connection for usage writes. Returns None on failure."""
-    global _conn, _cursor
-    if _cursor is not None:
-        return _cursor
-    if not config.get("POSTGRES_HOST"):
-        return None
-    try:
-        # config.connect_postgres() handles psycopg2.connect + isolation level
-        # + RLS scope SET. Single source of truth.
-        _conn = config.connect_postgres()
-        _cursor = _conn.cursor()
-        return _cursor
-    except Exception as e:
-        log_warn(f"[usage_recorder] connect failed: {e}")
-        _conn = None
-        _cursor = None
-        return None
 
 
 def log_usage(
@@ -96,45 +73,39 @@ def log_usage(
         log_warn("[usage_recorder] missing factory_name or service_name; skipping")
         return None
 
-    cursor = _get_cursor()
-    if cursor is None:
+    if not config.get("POSTGRES_HOST"):
         return None
 
     try:
-        cursor.execute(
-            """SELECT public.record_llm_usage(
-                %s, %s, %s, %s, %s, %s,
-                %s, %s, %s, %s,
-                %s, %s, %s, %s
-            )""",
-            (
-                fname,
-                sname,
-                user_id or 'system',
-                call_kind,
-                provider,
-                model,
-                int(input_tokens or 0),
-                int(cached_input_tokens or 0),
-                int(cache_creation_tokens or 0),
-                int(output_tokens or 0),
-                None if latency_ms is None else int(latency_ms),
-                request_id,
-                chat_id,
-                _preview_of(prompt_preview),
-            ),
-        )
-        row = cursor.fetchone()
-        return row[0] if row else None
+        with db.cursor() as cursor:
+            cursor.execute(
+                """SELECT public.record_llm_usage(
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s
+                )""",
+                (
+                    fname,
+                    sname,
+                    user_id or 'system',
+                    call_kind,
+                    provider,
+                    model,
+                    int(input_tokens or 0),
+                    int(cached_input_tokens or 0),
+                    int(cache_creation_tokens or 0),
+                    int(output_tokens or 0),
+                    None if latency_ms is None else int(latency_ms),
+                    request_id,
+                    chat_id,
+                    _preview_of(prompt_preview),
+                ),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
     except Exception as e:
+        # Connection-class errors invalidate the shared connection (next
+        # caller reconnects); SQL errors leave it alone.
+        db.invalidate_if_dead(e)
         log_warn(f"[usage_recorder] write failed: {e}")
-        # Reset connection on failure — next call will reconnect.
-        global _conn, _cursor
-        try:
-            if _conn is not None:
-                _conn.close()
-        except Exception:
-            pass
-        _conn = None
-        _cursor = None
         return None

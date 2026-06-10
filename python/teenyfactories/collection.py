@@ -33,7 +33,7 @@ import re
 import uuid
 from typing import Optional, List, Dict, Any, Union
 
-from . import config
+from . import config, db
 from .logging import log_error
 
 _SUPPORTED_DIMS = (256, 512, 768, 1024, 1536, 3072)
@@ -46,9 +46,8 @@ _ROW_COLS = ['factory_name', 'collection', 'key', 'user_id', 'value', 'state', '
 
 
 def _get_connection():
-    from .message_queue.base import _get_provider
-    provider = _get_provider()
-    return provider.cursor, config.FACTORY_NAME
+    """Fresh cursor on the process-wide shared connection (teenyfactories.db)."""
+    return db.cursor(), config.FACTORY_NAME
 
 
 def _validate_collection(name: str):
@@ -163,6 +162,7 @@ class Collection:
                 self._upsert_embedding(cursor, factory_name, key, embedding)
             return key
         except Exception as e:
+            db.invalidate_if_dead(e)
             log_error(f"collection.set failed: {e}")
             raise
 
@@ -191,6 +191,7 @@ class Collection:
                 self._upsert_embedding(cursor, factory_name, key, embedding)
             return key
         except Exception as e:
+            db.invalidate_if_dead(e)
             log_error(f"collection.add failed: {e}")
             raise
 
@@ -204,6 +205,7 @@ class Collection:
                 (factory_name, self._name, key),
             )
         except Exception as e:
+            db.invalidate_if_dead(e)
             log_error(f"collection.remove failed: {e}")
             raise
 
@@ -231,6 +233,7 @@ class Collection:
             row = cursor.fetchone()
             return _row_to_dict(row) if row else None
         except Exception as e:
+            db.invalidate_if_dead(e)
             log_error(f"collection.get failed: {e}")
             return None
 
@@ -255,6 +258,7 @@ class Collection:
                 )
             return [_row_to_dict(r) for r in cursor.fetchall()]
         except Exception as e:
+            db.invalidate_if_dead(e)
             log_error(f"collection.get_all failed: {e}")
             return []
 
@@ -278,6 +282,7 @@ class Collection:
             row = cursor.fetchone()
             return int(row[0]) if row else 0
         except Exception as e:
+            db.invalidate_if_dead(e)
             log_error(f"collection.count failed: {e}")
             return 0
 
@@ -291,6 +296,7 @@ class Collection:
             )
             return cursor.fetchone() is not None
         except Exception as e:
+            db.invalidate_if_dead(e)
             log_error(f"collection.exists failed: {e}")
             return False
 
@@ -345,6 +351,7 @@ class Collection:
                 results.append(base)
             return results
         except Exception as e:
+            db.invalidate_if_dead(e)
             log_error(f"collection.vector_search failed: {e}")
             return []
 
