@@ -41,7 +41,7 @@ import json
 import time
 from typing import Optional
 
-from . import config
+from . import config, db
 
 
 # ── Mode cache ─────────────────────────────────────────────────────────────
@@ -98,7 +98,7 @@ def _log_breakpoint(message: str, *, kind: str, **context) -> Optional[int]:
     `context` carries auto-halt locator fields (coll, state, row_key).
     """
     try:
-        conn = config.connect_postgres()
+        conn = db.get_connection()
         # Context first so the canonical halt fields (state/kind/agent_name/
         # container_id/hit_at) ALWAYS win — _auto_halt passes the dispatch
         # state under the key `state`, which would otherwise clobber the
@@ -132,7 +132,8 @@ def _log_breakpoint(message: str, *, kind: str, **context) -> Optional[int]:
             )
             row = cur.fetchone()
             return row[0] if row else None
-    except Exception:
+    except Exception as e:
+        db.invalidate_if_dead(e)
         return None
 
 
@@ -146,14 +147,15 @@ def _wait_for_release(log_id: int) -> None:
     """
     while True:
         try:
-            conn = config.connect_postgres()
+            conn = db.get_connection()
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT log_data FROM factory_logs WHERE id = %s",
                     (log_id,),
                 )
                 row = cur.fetchone()
-        except Exception:
+        except Exception as e:
+            db.invalidate_if_dead(e)
             return  # fail-open: DB blip during halt shouldn't wedge the agent
 
         if row is None:

@@ -126,10 +126,13 @@ POSTGRES_PASSWORD = (
 
 # ── Connection helper (single source of truth for psycopg2.connect) ────────
 #
-# Every tf-core code path that opens a psycopg2 connection MUST go through
-# this helper. It sets `app.factory_name` to FACTORY_NAME on the session so
-# the RLS policies on factory_* tables (init_orchestrator.sql, #159) auto-
-# fence reads/writes to this factory's rows only.
+# This helper is called ONLY by `teenyfactories.db` — the process-wide
+# shared-connection module. Every tf-core component (message queue,
+# collections, claims, logging, usage recorder, breakpoints) rides that one
+# connection via `db.get_connection()` / `db.cursor()`; nothing else may
+# call this helper directly. It sets `app.factory_name` to FACTORY_NAME on
+# the session so the RLS policies on factory_* tables (init_orchestrator.sql,
+# #159) auto-fence reads/writes to this factory's rows only.
 #
 # Fails closed: if FACTORY_NAME is unset OR equal to the dev "unknown"
 # sentinel, the SET is issued honestly (with that value) — the RLS policy
@@ -138,7 +141,8 @@ POSTGRES_PASSWORD = (
 #
 # Connection lifecycle: agents open ONE long-lived connection per process;
 # no pool, no checkout/release. The SESSION-scoped SET survives until the
-# connection drops + is re-opened, in which case this helper re-SETs.
+# connection drops; `db.get_connection()` reconnects through this helper,
+# which re-SETs.
 _warned_unknown_factory = False
 
 
@@ -152,12 +156,19 @@ def connect_postgres():
     import psycopg2
     import psycopg2.extensions
 
+    # Self-labelling in pg_stat_activity: factory/agent@container. AGENT_ID
+    # is the container hostname (docker container id / k8s pod name); dev
+    # runs outside a container fall back to the pid. Postgres truncates
+    # application_name at 63 bytes — acceptable.
+    app_name = f"{FACTORY_NAME}/{AGENT_SLUG or AGENT_NAME}@{AGENT_ID or f'pid-{os.getpid()}'}"
+
     conn = psycopg2.connect(
         host=POSTGRES_HOST,
         port=POSTGRES_PORT,
         database=POSTGRES_DB,
         user=POSTGRES_USER,
         password=POSTGRES_PASSWORD,
+        application_name=app_name,
     )
     conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
     with conn.cursor() as cur:
