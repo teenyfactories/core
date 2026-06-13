@@ -360,6 +360,11 @@ def run_pending():
         or (now - _last_poll_ts >= _SAFETY_POLL_INTERVAL_SEC)
     )
     if should_poll:
+        # Spend-limit enforcement no longer lives at the poll gate. Cost is
+        # owned by the orchestrator (computed at read; limits enforced via an
+        # HTTP clearance check tf makes BEFORE each LLM call — see
+        # teenyfactories/cost_clearance.py, gated inside tf.call_llm). The poll
+        # loop does no cost work.
         try:
             _poll_pass()
         except Exception as e:

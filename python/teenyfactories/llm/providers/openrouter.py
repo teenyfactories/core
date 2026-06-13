@@ -28,16 +28,15 @@ from typing import Optional
 from teenyfactories import config
 from teenyfactories.llm.base import LLMProvider
 
-
 # Canonical provider-name string. Kept here as a class attribute so any future
 # code that needs to stamp the provider identity onto a log row, usage record,
 # or error message can read it as data (not derive it from `__class__.__name__`,
 # which would be fragile under any future rename or bundling step).
-_PROVIDER_NAME = 'openrouter'
+_PROVIDER_NAME = "openrouter"
 
 # Default OpenRouter inference endpoint. Override per-deployment with
 # OPENROUTER_INFERENCE_URL (e.g. for a self-hosted proxy or alt-region edge).
-OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1'
+OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 
 # Model-ID substrings that reject the `temperature` kwarg when reached via
 # OpenRouter. Empty today — populate when a routed reasoning model starts
@@ -84,15 +83,22 @@ class OpenRouterProvider(LLMProvider):
         resolved_model = model or config.require_llm_model()
 
         client_kwargs = {
-            'openai_api_key': config.require_api_key('openrouter'),
-            'openai_api_base': config.get(
-                'OPENROUTER_INFERENCE_URL', OPENROUTER_DEFAULT_BASE_URL
-            ),
-            'model_name': resolved_model,
+            "openai_api_key": config.require_api_key("openrouter"),
+            "openai_api_base": config.get("OPENROUTER_INFERENCE_URL", OPENROUTER_DEFAULT_BASE_URL),
+            "model_name": resolved_model,
+            # Ask OpenRouter to include its ACTUAL generation cost in the
+            # response usage block (`usage.cost`, USD). That cost rides into the
+            # verbatim `raw` blob on the usage row; the ORCHESTRATOR reads it at
+            # cost-computation time and prefers it over its own rate table —
+            # OpenRouter routes to whichever upstream is cheapest/available, so
+            # a static table can't predict the real spend. This is metadata
+            # capture, not tf-side pricing (tf computes no cost). ChatOpenAI
+            # forwards `extra_body` verbatim into the chat/completions POST.
+            "extra_body": {"usage": {"include": True}},
         }
 
         if not _model_rejects_temperature(resolved_model):
-            client_kwargs['temperature'] = 0.3 if temperature is None else temperature
+            client_kwargs["temperature"] = 0.3 if temperature is None else temperature
 
         return ChatOpenAI(**client_kwargs)
 
