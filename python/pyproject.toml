@@ -32,6 +32,9 @@ dependencies = [
     "langchain>=0.1.0",
     "langchain-core>=0.1.0",
     "schedule>=1.2.0",
+    # PDF text/page extraction (MIT). Permissive replacement for the un-shippable
+    # AGPL PyMuPDF/fitz — the AGPL CI license gate blocks fitz from the base image.
+    "pypdf>=4.0.0",
 ]
 
 [project.optional-dependencies]
