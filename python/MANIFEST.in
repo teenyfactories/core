@@ -2,3 +2,4 @@ include README.md
 include LICENSE
 include pyproject.toml
 recursive-include teenyfactories *.py
+recursive-include teenyfactories *.json

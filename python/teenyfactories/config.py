@@ -18,10 +18,38 @@ Policy (set with the user 2026-04-28):
   • The orchestrator-side compose file uses `${VAR:?required}` so missing
     values fail at compose-up too; this module is the runtime backstop
     when an agent runs outside the orchestrator's spawning path.
+
+Resolution cascade (2026-06-14):
+  `get()` / `require()` resolve a value by asking the orchestrator's
+  in-built secrets/runtime-var store FIRST (tf.secrets → :8998 managed
+  table → its own env fallback), and only consult os.environ when the
+  cascade returns nothing. This lets an operator set a GLOBAL in the UI
+  env-var table (e.g. DEFAULT_LLM_PROVIDER=openrouter) and have running
+  agents pick it up at call time — no pod restart, no static re-injection.
+
+  The :8998 store is deny-by-default: only keys registered in
+  runtimeVars.js's ORCHESTRATOR_RUNTIME_VARS whitelist resolve there; any
+  other key 404s and silently falls through to os.environ. So per-container
+  identity vars (FACTORY_NAME, AGENT_NAME, HOSTNAME/AGENT_ID, AGENT_SLUG)
+  — never whitelisted — never depend on :8998.
+
+  Import-time safety: the module-load reads below (identity vars, logging
+  bootstrap, Postgres connection params) use `_env_only()` — a pure
+  os.environ read with NO :8998 round-trip — so `import teenyfactories`
+  never blocks on the secrets layer and there's no circular import
+  (secrets.py imports FACTORY_NAME from this module). Only the on-demand
+  getters cascade.
+
+  Fail-open + cached: cascade reads are memoised per-process for
+  _CASCADE_TTL_SEC so the hot path (config.get/require are called
+  frequently, some at import) doesn't round-trip :8998 per call. If the
+  cascade is unreachable / the feature is off, tf.secrets() already falls
+  straight to os.environ and never blocks — we inherit that resilience.
 """
 
 import logging
 import os
+import time
 
 from dotenv import load_dotenv
 
@@ -30,29 +58,100 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+# ── Cascade resolution (secrets/runtime-var store → os.environ) ─────────────
+#
+# A cascade lookup is memoised for this long so config.get/require don't hit
+# :8998 on every call. Mirrors secrets.py / cost_clearance.py TTL posture.
+# Short enough that a global edited in the UI env-var table reaches agents
+# within the window; long enough to keep the round-trip off the hot path.
+_CASCADE_TTL_SEC = 45.0
+
+# name -> (monotonic_ts, value_or_None). value is the cascade's answer for
+# this key (managed table → secrets.py's own env fallback). None means the
+# cascade had nothing AND its env fallback was empty too.
+_cascade_cache: dict[str, tuple[float, str | None]] = {}
+
+
+def _env_only(name: str) -> str | None:
+    """Pure os.environ read (empty string treated as unset). NO :8998 call.
+
+    Used for import-time reads (identity vars, logging, Postgres params) so
+    `import teenyfactories` never depends on the secrets layer, and as the
+    final fallback for the cascade getters."""
+    val = os.environ.get(name)
+    if val is None or val == "":
+        return None
+    return val
+
+
+def _cascade(name: str) -> str | None:
+    """Resolve a value via the secrets/runtime-var cascade, memoised.
+
+    Returns the cascade's value (managed :8998 table → secrets.py env
+    fallback) or None if it had nothing. Fail-open: any error inside
+    tf.secrets() already degrades to an os.environ read, so this never
+    raises and never blocks the agent.
+
+    Empty/whitespace cache entries are stored as None so callers treat them
+    as unset. The lazy import mirrors require_api_key — secrets.py imports
+    FACTORY_NAME from this module, so a top-level import would be circular.
+    """
+    now = time.monotonic()
+    hit = _cascade_cache.get(name)
+    if hit is not None and (now - hit[0]) < _CASCADE_TTL_SEC:
+        return hit[1]
+
+    try:
+        from teenyfactories.secrets import secrets as _secrets
+        val = _secrets(name)
+    except Exception:
+        # secrets layer not importable yet / transport blew up in an
+        # unexpected way → behave as "cascade had nothing", fall to env.
+        val = None
+
+    if val is not None and val == "":
+        val = None
+    _cascade_cache[name] = (now, val)
+    return val
+
+
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 
 def get(name: str, default: str | None = None) -> str | None:
-    """Read an environment variable with an optional default. Empty strings
-    are treated as unset."""
-    val = os.environ.get(name)
-    if val is None or val == "":
-        return default
-    return val
+    """Read a config value with an optional default.
+
+    Resolution order: secrets/runtime-var cascade (tf.secrets → :8998
+    managed table → its own env fallback) → os.environ → default. Empty
+    strings are treated as unset at every step. See module docstring for
+    the cascade + caching + fail-open semantics."""
+    val = _cascade(name)
+    if val is not None:
+        return val
+    val = _env_only(name)
+    if val is not None:
+        return val
+    return default
 
 
 def require(name: str, hint: str | None = None) -> str:
-    """Read an environment variable; raise RuntimeError if unset/empty."""
-    val = os.environ.get(name)
-    if val is None or val == "":
-        suffix = f" — {hint}" if hint else ""
-        raise RuntimeError(
-            f"Required environment variable {name} is not set{suffix}. "
-            f"The orchestrator should have injected this; if you're running "
-            f"the agent outside the orchestrator, set it in your .env."
-        )
-    return val
+    """Read a required config value; raise RuntimeError if unset/empty.
+
+    Same cascade → os.environ resolution as `get`, but raises instead of
+    returning a default when nothing resolves anywhere."""
+    val = _cascade(name)
+    if val is not None:
+        return val
+    val = _env_only(name)
+    if val is not None:
+        return val
+    suffix = f" — {hint}" if hint else ""
+    raise RuntimeError(
+        f"Required environment variable {name} is not set{suffix}. "
+        f"The orchestrator should have injected this (or registered it in "
+        f"the env-var table); if you're running the agent outside the "
+        f"orchestrator, set it in your .env."
+    )
 
 
 # ── Per-container identifiers (set by the orchestrator) ─────────────────────
@@ -61,22 +160,29 @@ def require(name: str, hint: str | None = None) -> str:
 # each agent container. FACTORY_NAME doubles as the NOTIFY channel prefix
 # ({factory_name}.{collection}.{state}). The 'unknown' fallback only fires
 # in dev runs outside the orchestrator.
-FACTORY_NAME = get("FACTORY_NAME", "unknown")
-AGENT_NAME = get("AGENT_NAME", "unknown")
+#
+# These four read via _env_only (direct os.environ, NO :8998 call): they are
+# per-container identity, never registered in the runtime-var table, and they
+# are read at module load — routing them through the cascade would (a) add a
+# :8998 dependency to `import teenyfactories` and (b) risk a circular import,
+# since secrets.py imports FACTORY_NAME from this module. They'd 404 in the
+# cascade anyway. See module docstring "Import-time safety".
+FACTORY_NAME = _env_only("FACTORY_NAME") or "unknown"
+AGENT_NAME = _env_only("AGENT_NAME") or "unknown"
 
 # AGENT_SLUG = the canonical, machine-stable identifier for this agent within
 # its factory (factory.yml agents key). Set by the orchestrator alongside
 # AGENT_NAME. Used as factory_logs.service_name so log queries stay stable
 # when an agent's display name (AGENT_NAME) is edited. Empty string in dev
 # runs that haven't injected it; the logger falls back to AGENT_NAME.
-AGENT_SLUG = get("AGENT_SLUG", "")
+AGENT_SLUG = _env_only("AGENT_SLUG") or ""
 
 # AGENT_ID = the full container hostname. Docker daemon sets HOSTNAME to the
 # container ID at create; Kubernetes sets it to the pod name. Stored on
 # factory_logs.container_id as the per-instance identifier so multiple
 # replicas of the same AGENT_NAME stay distinguishable. Empty string when
 # running outside a container (dev runs).
-AGENT_ID = get("HOSTNAME", "")
+AGENT_ID = _env_only("HOSTNAME") or ""
 
 
 # ── Logging ────────────────────────────────────────────────────────────────
@@ -90,7 +196,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
-if get("POSTGRES_HOST"):
+if _env_only("POSTGRES_HOST"):
     try:
         from .logging.logger import PostgresLogHandler  # noqa: WPS433 — local import to break cycle
 
@@ -112,16 +218,26 @@ if get("POSTGRES_HOST"):
 # remain as transitional fallback for envs not yet re-keyed; agents fall
 # back if FACTORY_* is unset.
 
-POSTGRES_HOST = get("POSTGRES_HOST", "postgres")
-POSTGRES_PORT = int(get("POSTGRES_PORT", "5432") or "5432")
-POSTGRES_DB = get("POSTGRES_DB", "teenyfactories")
-POSTGRES_USER = get("POSTGRES_FACTORY_USER") or get("POSTGRES_USER", "teenyfactories")
+# Connection-plane params read via _env_only (direct os.environ, NO :8998
+# call). These are read at module load to open the ONE process-wide DB
+# connection — and the cascade itself can't be consulted before that
+# connection exists in any meaningful ordering. They are also the credentials
+# the agent uses to reach Postgres; bootstrapping them from a network service
+# that may itself need the DB would be circular. Keep them env-only.
+POSTGRES_HOST = _env_only("POSTGRES_HOST") or "postgres"
+POSTGRES_PORT = int(_env_only("POSTGRES_PORT") or "5432")
+POSTGRES_DB = _env_only("POSTGRES_DB") or "teenyfactories"
+POSTGRES_USER = _env_only("POSTGRES_FACTORY_USER") or _env_only("POSTGRES_USER") or "teenyfactories"
 # No default — orchestrator always injects this. Agents started outside
 # the orchestrator must set it explicitly.
-POSTGRES_PASSWORD = (
-    get("POSTGRES_FACTORY_PASSWORD")
-    or (require("POSTGRES_PASSWORD", "orchestrator database password (POSTGRES_FACTORY_PASSWORD or legacy POSTGRES_PASSWORD)") if get("POSTGRES_HOST") else None)
-)
+POSTGRES_PASSWORD = _env_only("POSTGRES_FACTORY_PASSWORD") or _env_only("POSTGRES_PASSWORD")
+if POSTGRES_PASSWORD is None and _env_only("POSTGRES_HOST"):
+    raise RuntimeError(
+        "Required environment variable POSTGRES_FACTORY_PASSWORD (or legacy "
+        "POSTGRES_PASSWORD) is not set — orchestrator database password. The "
+        "orchestrator should have injected this; if you're running the agent "
+        "outside the orchestrator, set it in your .env."
+    )
 
 
 # ── Connection helper (single source of truth for psycopg2.connect) ────────
@@ -200,7 +316,7 @@ def require_llm_model() -> str:
 
 
 def require_embedding_provider() -> str:
-    return require("DEFAULT_EMBEDDING_PROVIDER", "one of: openai, ollama")
+    return require("DEFAULT_EMBEDDING_PROVIDER", "one of: openai, ollama, openrouter")
 
 
 def require_embedding_model() -> str:
@@ -224,13 +340,21 @@ def require_api_key(provider: str) -> str:
     }.get(provider)
     if not var_name:
         raise RuntimeError(f"Unknown LLM provider '{provider}'")
-    # Local import to avoid a circular import at module load (secrets.py
-    # imports FACTORY_NAME from config).
-    from teenyfactories.secrets import secrets as _secrets
-    val = _secrets(var_name)
+    # Cascade via the shared memoised resolver (tf.secrets → :8998 → env),
+    # NOT a second direct tf.secrets() call — `get`/`require` now cascade
+    # too, so calling require() here would double round-trip the same key.
+    # _cascade already covers the secrets path + its env fallback; only fall
+    # to a raw env read + raise when the cascade came back empty.
+    val = _cascade(var_name) or _env_only(var_name)
     if val:
         return val
-    return require(var_name, f"required by DEFAULT_LLM_PROVIDER='{provider}'")
+    raise RuntimeError(
+        f"Required environment variable {var_name} is not set — "
+        f"required by DEFAULT_LLM_PROVIDER='{provider}'. The orchestrator "
+        f"should have injected this (or registered it in the env-var table); "
+        f"if you're running the agent outside the orchestrator, set it in "
+        f"your .env."
+    )
 
 
 # Default Ollama base URL — picked to match what works inside Docker

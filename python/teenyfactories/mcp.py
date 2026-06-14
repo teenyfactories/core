@@ -56,19 +56,30 @@ class McpToolBuilder:
         self._name = name
         self._description = description
         self._input_schema = {"type": "object", "properties": {}}
+        self._annotations: Optional[Dict[str, Any]] = None
 
     def with_input(self, schema: dict):
         """Set the JSON Schema for this tool's input parameters."""
         self._input_schema = schema
         return self
 
+    def with_annotations(self, annotations: dict):
+        """Set the MCP ToolAnnotations object (readOnlyHint, destructiveHint,
+        idempotentHint, openWorldHint, title). Passed through verbatim to MCP
+        clients, which use it to categorise tools."""
+        self._annotations = annotations
+        return self
+
     def do(self, handler: Callable):
         """Register the handler function for this tool."""
-        _mcp_tools.append({
+        tool = {
             'name': self._name,
             'description': self._description,
             'inputSchema': self._input_schema,
-        })
+        }
+        if self._annotations is not None:
+            tool['annotations'] = self._annotations
+        _mcp_tools.append(tool)
         _mcp_handlers[self._name] = handler
         log_debug(f"🔨 Registered MCP tool: {self._name}")
         return handler

@@ -105,11 +105,12 @@ Documentation = "https://github.com/teenyfactories/core/blob/main/README.md"
 Repository = "https://github.com/teenyfactories/core"
 Issues = "https://github.com/teenyfactories/core/issues"
 
-[tool.setuptools]
-packages = ["teenyfactories"]
+[tool.setuptools.packages.find]
+include = ["teenyfactories*"]
 
 [tool.setuptools.package-data]
 teenyfactories = ["py.typed"]
+"teenyfactories.llm" = ["llm_pricing.json"]
 
 [tool.black]
 line-length = 120
