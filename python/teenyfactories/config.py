@@ -200,7 +200,7 @@ def require_llm_model() -> str:
 
 
 def require_embedding_provider() -> str:
-    return require("DEFAULT_EMBEDDING_PROVIDER", "one of: openai, ollama")
+    return require("DEFAULT_EMBEDDING_PROVIDER", "one of: openai, ollama, openrouter")
 
 
 def require_embedding_model() -> str:
