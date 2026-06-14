@@ -45,6 +45,18 @@ from .llm import call_llm
 # Secrets — pull from orchestrator's in-built secrets store with env-var fallback.
 from .secrets import secrets
 
+# Bucket store — file storage for a factory volume. Local (docker bind mount)
+# or remote (k8s → orchestrator :8998 → S3) backend, selected per-container.
+# UNLIKE secrets/clearance, this SURFACES errors (wrong file data is worse than
+# a loud failure). Error family: BucketStoreError + subclasses.
+from .bucket_store import (
+    bucket_store,
+    BucketStoreError,
+    BucketNotFoundError,
+    BucketPermissionError,
+    BucketConflictError,
+)
+
 # Message Queue
 from .message_queue import on_state, run_pending
 
@@ -117,6 +129,11 @@ __all__ = [
 
     # Secrets
     'secrets',
+
+    # Bucket store (factory volume file access) + error family
+    'bucket_store',
+    'BucketStoreError', 'BucketNotFoundError',
+    'BucketPermissionError', 'BucketConflictError',
 
     # Message Queue
     'on_state', 'run_pending',
