@@ -15,11 +15,19 @@ Public API:
         .set(key, state=..., data=..., embedding=...)   # update existing row
         .add(state, data=..., embedding=...)            # create new row, auto-UUID
         .get(key)                                       # full row or None
-        .get_all(state=...)                             # list of rows
         .remove(key)                                    # delete one
-        .count(state=...)                               # int
         .exists(key)                                    # bool
-        .vector_search(text_or_vec, limit=5, state=...) # ANN
+
+    Reads go through a lazy query builder (see query.py). Filter with
+    `.state(x|[..])` and/or `.where("<dsl>")`, then a terminal:
+
+        .get_all()                                      # list of rows
+        .count()                                        # int
+        .first()                                        # one row or None
+        .vector_search(text_or_vec).limit(n).run()      # ANN (default limit 10)
+
+    e.g. tf.collection('chunks').state('vectorised')
+              .where("token_count >= 400").vector_search(q).limit(5).run()
 
 Naming conventions used in returned row dicts:
     {factory_name, collection, key, user_id, data, state, created_at, updated_at}
@@ -35,6 +43,7 @@ from typing import Optional, List, Dict, Any, Union
 
 from . import config, db
 from .logging import log_error
+from .query import CollectionQuery
 
 _SUPPORTED_DIMS = (256, 512, 768, 1024, 1536, 3072)
 _ID_RE = re.compile(r'^[a-z0-9_]+$')
@@ -237,54 +246,32 @@ class Collection:
             log_error(f"collection.get failed: {e}")
             return None
 
-    def get_all(self, state: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Return all rows in this collection, optionally filtered by state."""
-        try:
-            cursor, factory_name = _get_connection()
-            if state is not None:
-                _validate_state(state)
-                cursor.execute(
-                    f"SELECT {', '.join(_ROW_COLS)} FROM factory_data "
-                    f"WHERE factory_name = %s AND collection = %s AND state = %s "
-                    f"ORDER BY updated_at DESC",
-                    (factory_name, self._name, state),
-                )
-            else:
-                cursor.execute(
-                    f"SELECT {', '.join(_ROW_COLS)} FROM factory_data "
-                    f"WHERE factory_name = %s AND collection = %s "
-                    f"ORDER BY updated_at DESC",
-                    (factory_name, self._name),
-                )
-            return [_row_to_dict(r) for r in cursor.fetchall()]
-        except Exception as e:
-            db.invalidate_if_dead(e)
-            log_error(f"collection.get_all failed: {e}")
-            return []
+    # ── Query builder entrypoints ────────────────────────────────────────────
+    # Reads go through the lazy CollectionQuery (see query.py). `.state()` /
+    # `.where()` / `.limit()` / `.vector_search()` start a chain; `.get_all()` /
+    # `.count()` / `.first()` are terminals. The old `state=` kwarg on get_all /
+    # count / vector_search is GONE — use `.state(...)`.
+    def state(self, value):
+        """Start a query filtered by lifecycle state (scalar or list)."""
+        return CollectionQuery(self._name).state(value)
 
-    def count(self, state: Optional[str] = None) -> int:
-        """Count rows, optionally filtered by state."""
-        try:
-            cursor, factory_name = _get_connection()
-            if state is not None:
-                _validate_state(state)
-                cursor.execute(
-                    "SELECT COUNT(*) FROM factory_data "
-                    "WHERE factory_name = %s AND collection = %s AND state = %s",
-                    (factory_name, self._name, state),
-                )
-            else:
-                cursor.execute(
-                    "SELECT COUNT(*) FROM factory_data "
-                    "WHERE factory_name = %s AND collection = %s",
-                    (factory_name, self._name),
-                )
-            row = cursor.fetchone()
-            return int(row[0]) if row else 0
-        except Exception as e:
-            db.invalidate_if_dead(e)
-            log_error(f"collection.count failed: {e}")
-            return 0
+    def where(self, expr: str):
+        """Start a query with a `.where()` string-DSL predicate."""
+        return CollectionQuery(self._name).where(expr)
+
+    def limit(self, n: int):
+        return CollectionQuery(self._name).limit(n)
+
+    def get_all(self) -> List[Dict[str, Any]]:
+        """Return all rows in this collection (unfiltered). Filter via .state()/.where()."""
+        return CollectionQuery(self._name).get_all()
+
+    def count(self) -> int:
+        """Count all rows in this collection. Filter via .state()/.where()."""
+        return CollectionQuery(self._name).count()
+
+    def first(self) -> Optional[Dict[str, Any]]:
+        return CollectionQuery(self._name).first()
 
     def exists(self, key: str) -> bool:
         try:
@@ -302,58 +289,16 @@ class Collection:
 
     # ------------------------------------------------------------------ search
 
-    def vector_search(
-        self,
-        text_or_vec: Union[str, List[float]],
-        limit: int = 5,
-        state: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+    def vector_search(self, text_or_vec: Union[str, List[float]]) -> "CollectionQuery":
         """
-        Vector ANN search. Accepts a query string (auto-embedded via tf.embed)
-        or a pre-computed vector. Optionally filter by state.
+        Start an ANN search. Accepts a query string (auto-embedded via tf.embed)
+        or a pre-computed vector. Returns a CollectionQuery ordered by
+        similarity — chain `.limit(n)` and a terminal (`.run()` / `.get_all()`).
+        With no `.limit()`, defaults to 10. Rows carry a `similarity` key.
 
-        Returns row dicts with an extra `similarity` key (cosine, 0..1).
+            tf.collection('chunks').state('vectorised').vector_search(q).limit(5).run()
         """
-        if isinstance(text_or_vec, str):
-            from .embedding import embed
-            embedding = embed(text_or_vec)
-        else:
-            embedding = list(text_or_vec)
-
-        try:
-            cursor, factory_name = _get_connection()
-            col = _dim_column(embedding)
-            sql = f"""
-                SELECT {', '.join('d.' + c for c in _ROW_COLS)},
-                       1 - (v.{col} <=> %s::vector) AS similarity
-                  FROM factory_vectors v
-                  JOIN factory_data d
-                    ON d.factory_name = v.factory_name
-                   AND d.collection  = v.collection
-                   AND d.key         = v.key
-                 WHERE v.factory_name = %s
-                   AND v.collection  = %s
-                   AND v.{col} IS NOT NULL
-            """
-            params: List[Any] = [str(embedding), factory_name, self._name]
-            if state is not None:
-                _validate_state(state)
-                sql += " AND d.state = %s"
-                params.append(state)
-            sql += f" ORDER BY v.{col} <=> %s::vector LIMIT %s"
-            params.extend([str(embedding), limit])
-            cursor.execute(sql, params)
-
-            results = []
-            for row in cursor.fetchall():
-                base = _row_to_dict(row[:-1])
-                base['similarity'] = float(row[-1])
-                results.append(base)
-            return results
-        except Exception as e:
-            db.invalidate_if_dead(e)
-            log_error(f"collection.vector_search failed: {e}")
-            return []
+        return CollectionQuery(self._name).vector_search(text_or_vec)
 
 
 def collection(name: str) -> Collection:
