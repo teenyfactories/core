@@ -78,6 +78,12 @@ google-drive = [
     "google-auth>=2.0.0",
 ]
 
+# Audio extraction for transcription agents — ships a self-contained static
+# ffmpeg binary (~80 MB) so agents can strip the audio track off large video
+# files before sending it to a transcription API (avoids the 25 MB API limit).
+# Far lighter than apt `ffmpeg` (~466 MB of codec libs we don't need).
+media = ["imageio-ffmpeg>=0.5.0"]
+
 # Everything
 all = [
     "langchain-openai>=0.0.5",
@@ -91,6 +97,7 @@ all = [
     "pyyaml>=6.0.0",
     "google-api-python-client>=2.0.0",
     "google-auth>=2.0.0",
+    "imageio-ffmpeg>=0.5.0",
 ]
 
 # Development dependencies
