@@ -31,9 +31,19 @@ class AzureBedrockProvider(LLMProvider):
         query_params = urllib.parse.parse_qs(parsed.query)
         self.azure_api_version = query_params.get('api-version', ['2025-01-01-preview'])[0]
 
-    def get_client(self, model: Optional[str] = None, temperature: Optional[float] = None):
-        """Get Azure Bedrock LLM client. Optional overrides for model + temperature.
-        o3 models silently ignore the temperature override (the SDK rejects it)."""
+    def get_client(
+        self,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ):
+        """Get Azure Bedrock LLM client. Optional overrides for model + temperature + max_tokens.
+        o3 models silently ignore the temperature override (the SDK rejects it).
+
+        `max_tokens` (when set) caps output tokens. For standard models it maps
+        to AzureChatOpenAI's `max_tokens`; for o3 reasoning models it maps to
+        the raw OpenAI `max_completion_tokens` kwarg (o3 rejects `max_tokens`).
+        When None nothing is passed and the provider default applies."""
         try:
             from langchain_openai import AzureChatOpenAI
         except ImportError:
@@ -59,10 +69,13 @@ class AzureBedrockProvider(LLMProvider):
 
             class O3AzureWrapper(Runnable):
                 """Custom wrapper for o3 models that don't support temperature"""
-                def __init__(self, azure_client, deployment):
+                def __init__(self, azure_client, deployment, max_completion_tokens=None):
                     self.client = azure_client
                     self.deployment = deployment
                     self.temperature = None  # For debug display
+                    # o3 reasoning models reject `max_tokens`; the output cap is
+                    # passed as `max_completion_tokens`. None = provider default.
+                    self.max_completion_tokens = max_completion_tokens
 
                 def invoke(self, input, config=None):
                     # Handle different input types from LangChain chains
@@ -82,11 +95,14 @@ class AzureBedrockProvider(LLMProvider):
                         openai_messages = [{"role": "user", "content": str(input)}]
 
                     # Make API call without temperature parameter
-                    response = self.client.chat.completions.create(
-                        model=self.deployment,
-                        messages=openai_messages
+                    create_kwargs = {
+                        'model': self.deployment,
+                        'messages': openai_messages,
                         # Deliberately omitting temperature for o3 models
-                    )
+                    }
+                    if self.max_completion_tokens is not None:
+                        create_kwargs['max_completion_tokens'] = self.max_completion_tokens
+                    response = self.client.chat.completions.create(**create_kwargs)
 
                     # Return AIMessage for LangChain compatibility
                     return AIMessage(content=response.choices[0].message.content)
@@ -98,10 +114,12 @@ class AzureBedrockProvider(LLMProvider):
                 azure_endpoint=self.azure_endpoint
             )
 
-            return O3AzureWrapper(raw_client, deployment)
+            return O3AzureWrapper(raw_client, deployment, max_completion_tokens=max_tokens)
         else:
             # Other models support temperature
             client_kwargs['temperature'] = 0.3 if temperature is None else temperature
+            if max_tokens is not None:
+                client_kwargs['max_tokens'] = max_tokens
             return AzureChatOpenAI(**client_kwargs)
 
     def get_model_name(self, model: Optional[str] = None) -> str:
