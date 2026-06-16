@@ -70,12 +70,21 @@ class DigitalOceanProvider(LLMProvider):
     providerName = _PROVIDER_NAME  # class-level literal — minify/rename-safe
     provider_name = _PROVIDER_NAME  # snake_case alias for Python-side reads
 
-    def get_client(self, model: Optional[str] = None, temperature: Optional[float] = None):
-        """Get a DigitalOcean Gradient AI LLM client. Optional overrides for model + temperature.
+    def get_client(
+        self,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ):
+        """Get a DigitalOcean Gradient AI LLM client. Optional overrides for model + temperature + max_tokens.
 
         If the resolved model is a DO-proxied Anthropic reasoning model
         (Opus 4.7+), the temperature kwarg is omitted — DO forwards a 400
         from Anthropic otherwise.
+
+        `max_tokens` (when set) caps output tokens via the OpenAI-compatible
+        `max_tokens` kwarg; when None nothing is passed and the upstream
+        default applies.
         """
         try:
             from langchain_openai import ChatOpenAI
@@ -97,6 +106,9 @@ class DigitalOceanProvider(LLMProvider):
 
         if not _model_rejects_temperature(resolved_model):
             client_kwargs['temperature'] = 0.3 if temperature is None else temperature
+
+        if max_tokens is not None:
+            client_kwargs['max_tokens'] = max_tokens
 
         return ChatOpenAI(**client_kwargs)
 

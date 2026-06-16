@@ -47,13 +47,23 @@ class AnthropicProvider(LLMProvider):
     providerName = 'anthropic'   # class-level literal — minify/rename-safe
     provider_name = 'anthropic'  # snake_case alias for Python-side reads
 
-    def get_client(self, model: Optional[str] = None, temperature: Optional[float] = None):
-        """Get Anthropic LLM client. Optional overrides for model + temperature.
+    def get_client(
+        self,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ):
+        """Get Anthropic LLM client. Optional overrides for model + temperature + max_tokens.
 
         If the resolved model is in `ANTHROPIC_NO_TEMPERATURE_MODELS`, the
         temperature kwarg is omitted (Anthropic returns 400 otherwise). The
         caller's `temperature` argument is silently dropped in that case — the
         model does not support it.
+
+        `max_tokens` (when set) caps output tokens via ChatAnthropic's
+        `max_tokens` kwarg; when None nothing is passed and ChatAnthropic's
+        default (1024) applies — so long structured responses should pass a
+        larger value to avoid truncation.
         """
         try:
             from langchain_anthropic import ChatAnthropic
@@ -69,6 +79,9 @@ class AnthropicProvider(LLMProvider):
 
         if not _model_rejects_temperature(resolved_model):
             client_kwargs['temperature'] = 0.3 if temperature is None else temperature
+
+        if max_tokens is not None:
+            client_kwargs['max_tokens'] = max_tokens
 
         return ChatAnthropic(**client_kwargs)
 
