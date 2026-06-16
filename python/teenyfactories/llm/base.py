@@ -54,8 +54,19 @@ class LLMProvider(ABC):
     """Abstract base class for LLM providers."""
 
     @abstractmethod
-    def get_client(self, model: Optional[str] = None):
-        """Return a LangChain-compatible client. `model` overrides DEFAULT_LLM_MODEL."""
+    def get_client(
+        self,
+        model: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+    ):
+        """Return a LangChain-compatible client. `model` overrides DEFAULT_LLM_MODEL.
+
+        `temperature` and `max_tokens`, when set, are threaded into the client
+        constructor per provider (never mutating a shared client). `max_tokens`
+        caps OUTPUT tokens; when None the provider/langchain default applies and
+        nothing is passed to the client.
+        """
 
     @abstractmethod
     def get_model_name(self, model: Optional[str] = None) -> str:
@@ -140,6 +151,7 @@ def get_llm_client(
     provider: Optional[str] = None,
     model: Optional[str] = None,
     temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
 ):
     """
     Return a LangChain-compatible LLM client.
@@ -153,8 +165,14 @@ def get_llm_client(
         temperature: Optional sampling temperature override. Defaults to the
                      provider's built-in default (0.3 for the chat-style
                      models; ignored on Azure o3).
+        max_tokens:  Optional cap on OUTPUT tokens. None (default) passes
+                     nothing to the client, so the provider/langchain default
+                     applies (e.g. ChatAnthropic's 1024). Mapped to each
+                     provider's native kwarg.
     """
-    return _get_provider_instance(provider).get_client(model=model, temperature=temperature)
+    return _get_provider_instance(provider).get_client(
+        model=model, temperature=temperature, max_tokens=max_tokens
+    )
 
 
 def _get_model_name(provider: Optional[str] = None, model: Optional[str] = None) -> str:
@@ -348,6 +366,7 @@ def call_llm(
     provider: Optional[str] = None,
     model: Optional[str] = None,
     temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
 ):
     """
     Call the LLM, optionally parse the response into `response_model`, log usage.
@@ -365,6 +384,17 @@ def call_llm(
         temperature:     Override the provider's default temperature for this
                          call. Passed through to the client constructor — never
                          mutates a shared client instance.
+        max_tokens:      Optional cap on the number of OUTPUT tokens the model
+                         may generate for this call. Default None = leave it to
+                         the provider/langchain default (e.g. ChatAnthropic caps
+                         output at 1024) — when None, nothing is passed to the
+                         client and behaviour is byte-for-byte unchanged. Set a
+                         larger value (e.g. 8192) for long structured responses
+                         that would otherwise truncate. Mapped to each provider's
+                         native kwarg (langchain `max_tokens`, Google
+                         `max_output_tokens`, Ollama `num_predict`, Azure o3
+                         `max_completion_tokens`). Passed through to the client
+                         constructor — never mutates a shared client instance.
 
     Returns:
         Instance of `response_model` if one was given; otherwise the raw
@@ -393,7 +423,7 @@ def call_llm(
         except Exception as clearance_err:
             log_warn(f"💬 LLM clearance check unavailable (proceeding): {clearance_err}")
 
-        llm = get_llm_client(provider, model=model, temperature=temperature)
+        llm = get_llm_client(provider, model=model, temperature=temperature, max_tokens=max_tokens)
 
         if response_model is not None:
             prompt_template, parser = _prepare_prompt(prompt_template, prompt_inputs, response_model)
