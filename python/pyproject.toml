@@ -32,6 +32,9 @@ dependencies = [
     "langchain>=0.1.0",
     "langchain-core>=0.1.0",
     "schedule>=1.2.0",
+    # PDF text/page extraction (MIT). Permissive replacement for the un-shippable
+    # AGPL PyMuPDF/fitz — the AGPL CI license gate blocks fitz from the base image.
+    "pypdf>=4.0.0",
 ]
 
 [project.optional-dependencies]
@@ -75,6 +78,12 @@ google-drive = [
     "google-auth>=2.0.0",
 ]
 
+# Audio extraction for transcription agents — ships a self-contained static
+# ffmpeg binary (~80 MB) so agents can strip the audio track off large video
+# files before sending it to a transcription API (avoids the 25 MB API limit).
+# Far lighter than apt `ffmpeg` (~466 MB of codec libs we don't need).
+media = ["imageio-ffmpeg>=0.5.0"]
+
 # Everything
 all = [
     "langchain-openai>=0.0.5",
@@ -88,6 +97,7 @@ all = [
     "pyyaml>=6.0.0",
     "google-api-python-client>=2.0.0",
     "google-auth>=2.0.0",
+    "imageio-ffmpeg>=0.5.0",
 ]
 
 # Development dependencies
@@ -105,11 +115,12 @@ Documentation = "https://github.com/teenyfactories/core/blob/main/README.md"
 Repository = "https://github.com/teenyfactories/core"
 Issues = "https://github.com/teenyfactories/core/issues"
 
-[tool.setuptools]
-packages = ["teenyfactories"]
+[tool.setuptools.packages.find]
+include = ["teenyfactories*"]
 
 [tool.setuptools.package-data]
 teenyfactories = ["py.typed"]
+"teenyfactories.llm" = ["llm_pricing.json"]
 
 [tool.black]
 line-length = 120
