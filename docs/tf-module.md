@@ -49,7 +49,7 @@ def handle_chunked(item):
 ### Agents are just agents
 
 There is **no agents-vs-workers distinction**. Every component is an "agent".
-Some call an LLM (`tf.call_llm`), some only move data around — that's a
+Some call an LLM (`tf.llm()`), some only move data around — that's a
 property of what the code does, not a structural category. The layout is one
 `factory.yml` plus an `agents/` folder with **one Python file per agent**, and
 the file's slug is its filename: `agents/{slug}.py`.
@@ -284,90 +284,279 @@ tf.collection('lead') \
 
 ## LLMs
 
-`tf.call_llm` is the single entry point for calling a language model. You give
-it a prompt template, the inputs to fill it, and (usually) a Pydantic model
-describing the structured output you want back.
+`tf.llm()` is the entry point for calling a language model — a **config-first
+fluent builder** with **eager** terminals. You build up the call (model, system
+prompt, tuning, optional structured output) with chainable config links, then
+end with a terminal that fires the call and returns the result. The builder
+holds no result; the work happens when you call a terminal.
+
+```python
+import teenyfactories as tf
+
+# Plain text in, text out.
+answer = tf.llm().ask("Summarise this in one line: {text}", {"text": data})
+
+# With a system prompt + tuning.
+answer = (
+    tf.llm()
+    .system("You are a terse analyst.")
+    .temperature(0.1)
+    .max_tokens(8192)
+    .ask("Analyse: {text}", {"text": data})
+)
+```
+
+`.ask(prompt, inputs)` takes a prompt **string or `PromptTemplate`** and an
+`inputs` dict; `{placeholders}` in the prompt are filled from `inputs`. With
+`.system(text)`, braces in the system text are **not** parsed as template
+variables (it's a literal system message) — only the human prompt is templated.
+
+### Config links
+
+| Link | Effect |
+|---|---|
+| `.model(name)` | Override `DEFAULT_LLM_MODEL` for this call |
+| `.provider(name)` | Override `DEFAULT_LLM_PROVIDER` (`openai` / `anthropic` / `google` / `ollama` / `azure_bedrock` / `digitalocean` / `openrouter`) |
+| `.temperature(t)` | Sampling temperature (provider default ≈0.3) |
+| `.max_tokens(n)` | Cap on **output** tokens |
+| `.system(text)` | System prompt (literal; not templated) |
+| `.with_structured_output(Model)` | Return a parsed Pydantic instance instead of text (see below) |
+
+```python
+# Route a cheap, high-volume call to a smaller model:
+answer = (
+    tf.llm()
+    .provider('anthropic')
+    .model('claude-haiku-4-5-20251001')   # overrides DEFAULT_LLM_MODEL
+    .temperature(0.1)
+    .ask("Classify: {text}", {"text": snippet})
+)
+```
+
+The active provider and model come from the `DEFAULT_LLM_PROVIDER` and
+`DEFAULT_LLM_MODEL` environment variables; `.provider(...)` / `.model(...)`
+override them for one call. Provider credentials are resolved automatically —
+you never pass API keys to `tf.llm()`.
+
+!!! warning "`max_tokens` and long structured output"
+    `.max_tokens(n)` caps the number of **output** tokens. Omit it and nothing
+    is passed to the provider, so the provider's own default applies. Some
+    clients cap output low by default (notably **ChatAnthropic at 1024
+    tokens**), which can silently truncate a long structured response. If a
+    reply needs room (e.g. an exhaustive list extracted from a long document),
+    set a larger value such as `.max_tokens(8192)`. The framework maps it to
+    each provider's native output-token argument for you (langchain
+    `max_tokens` for OpenAI / Anthropic / DigitalOcean / OpenRouter, Google
+    `max_output_tokens`, Ollama `num_predict`, Azure o3
+    `max_completion_tokens`).
+
+!!! note "Temperature is silently dropped for reasoning-class models"
+    Anthropic's Opus 4.7+ family (and the same models proxied via DigitalOcean)
+    reject the `temperature` request kwarg. The framework detects these by
+    model-ID substring and omits it, so `.temperature(...)` is harmless but has
+    no effect on those models.
+
+### Terminals (eager)
+
+A terminal fires the call. There are two single-shot terminals and two agentic
+ones; each has a `_with_meta` variant that also returns a telemetry dict.
+
+| Terminal | Returns | When |
+|---|---|---|
+| `.ask(prompt, inputs)` | `output` (str, or the structured `Model`) | single-shot |
+| `.ask_with_meta(prompt, inputs)` | `(output, meta)` | single-shot + telemetry |
+| `.run_agent_loop(task)` | `output` (str) | agentic tool-calling loop |
+| `.run_agent_loop_with_meta(task)` | `(output, meta)` | loop + telemetry |
+
+### Structured output
+
+`.with_structured_output(Model)` returns a parsed Pydantic instance instead of
+text. It **prefers the provider's native enforcement** (LangChain
+`with_structured_output`) and **falls back** to a `PydanticOutputParser` path
+(inject format instructions → invoke → clean → parse) when a provider/model
+doesn't enforce the schema. The degrade is logged at **debug** level (so an
+OpenRouter soft-failure — accepts the parameter but the upstream ignores it —
+is visible without noise). On OpenRouter the call additionally routes with
+`require_parameters` so only upstreams that honour structured output are
+selected.
 
 ```python
 from pydantic import BaseModel, Field
-from langchain_core.prompts import PromptTemplate
 
 class Analysis(BaseModel):
     summary: str = Field(description="One-paragraph summary")
     score: float = Field(description="Confidence 0-1")
 
-prompt = PromptTemplate.from_template(
-    "Analyse this document:\n{text}\n{format_instructions}"
-)
-
-result = tf.call_llm(
-    prompt,
-    {"text": document_text},
-    response_model=Analysis,
+result = (
+    tf.llm()
+    .with_structured_output(Analysis)
+    .ask("Analyse this document:\n{text}", {"text": document_text})
 )
 print(result.summary, result.score)   # result is an Analysis instance
 ```
 
-When `response_model` is given, the framework appends format instructions to
-your prompt, validates the model's reply against the schema, and returns a
-typed instance. Omit `response_model` to get the cleaned response text back as
-a plain string.
+### The `meta` dict
 
-### Parameters
-
-| Parameter | Default | Purpose |
-|---|---|---|
-| `prompt_template` | — | a LangChain `PromptTemplate` (or string template) |
-| `prompt_inputs` | — | dict of values to fill the template |
-| `response_model` | `None` | Pydantic class for structured output; `None` returns text |
-| `provider` | env default | override `DEFAULT_LLM_PROVIDER` for this call |
-| `model` | env default | override `DEFAULT_LLM_MODEL` for this call |
-| `temperature` | provider default (≈0.3) | sampling temperature |
-| `max_tokens` | `None` | cap on **output** tokens |
+The `_with_meta` terminals (and `tf.embed(...).with_meta()`) return a plain
+dict — a read-view over the verbatim provider telemetry. **Every field is
+best-effort and may be `None`.**
 
 ```python
-# Route a cheap, high-volume call to a smaller model:
-result = tf.call_llm(
-    prompt,
-    {"text": snippet},
-    response_model=Analysis,
-    provider='anthropic',
-    model='claude-haiku-4-5-20251001',
-    temperature=0.1,
+output, meta = tf.llm().ask_with_meta("Analyse: {text}", {"text": data})
+
+meta = {
+    "provider":      "anthropic",   # resolved provider
+    "model":         "claude-...",  # provider's reported model, else the requested one
+    "cost":          0.0021,        # USD — OpenRouter-only; None elsewhere
+    "finish_reason": "stop",        # verbatim provider value (None if unreported)
+    "latency_ms":    842,
+    "usage":         {...},         # verbatim LangChain usage_metadata
+    "raw":           {...},         # verbatim usage + response-metadata blob
+}
+```
+
+- `usage` is the verbatim LangChain `usage_metadata` (`input_tokens` /
+  `output_tokens` / `total_tokens` / `input_token_details.{cache_read,
+  cache_creation}` / …). Shapes are **provider-dependent** — treat a missing
+  key as "not reported", not zero.
+- `cost` is populated only when the provider reports it (OpenRouter). tf
+  computes **no** cost itself; the orchestrator prices off `raw` at read time.
+- `finish_reason` is the provider's **verbatim** value — there is **no custom
+  outcome enum** in core. A factory that wants its own labels (e.g.
+  `finished` / `maxed` / `gave_up`) maps them in factory code.
+
+!!! note "Usage logging is automatic"
+    Every `tf.llm()` / `tf.embed()` call is logged transparently to factory
+    usage tracking — you don't call a helper. Cost is **not** computed
+    tf-side; usage is stored verbatim and the orchestrator computes USD at
+    read time. Logging failures never break the underlying call. (A
+    cost-based spend gate also runs automatically before each call; it
+    **fails open**, so an orchestrator hiccup never blocks real work.)
+
+### Agentic loop (`.run_agent_loop*`)
+
+`.run_agent_loop(task)` runs a **native provider tool-calling** ReAct loop: the
+model is bound to a set of tools, calls them, sees the results, and continues
+until it stops calling tools (or hits `max_turns`). The loop is **eager** —
+tools mutate state as it runs.
+
+```python
+out, meta = (
+    tf.llm()
+    .system(SYSTEM_PROMPT)
+    .add_tools_from_self()        # bind THIS agent's own tf.add_mcp_tool handlers
+    .max_turns(50)
+    .run_agent_loop_with_meta(task_text)
 )
 ```
 
-!!! warning "`max_tokens` and long structured output"
-    `max_tokens` caps the number of **output** tokens. It defaults to `None`,
-    which passes nothing to the provider — so the provider's own default
-    applies. Some clients cap output low by default (notably ChatAnthropic at
-    1024 tokens), which can silently truncate a long structured response. If a
-    reply needs room (e.g. an exhaustive list extracted from a long document),
-    set a larger value such as `max_tokens=8192`. The framework maps it to each
-    provider's native output-token argument for you.
+**Tool sourcing — same factory only.** Cross-**factory** tool binding is not
+available (cut/parked — security + DB gated).
 
-The active provider and model come from the `DEFAULT_LLM_PROVIDER` and
-`DEFAULT_LLM_MODEL` environment variables; the per-call `provider` / `model`
-arguments override them for one call. Provider credentials are resolved
-automatically — you do not pass API keys to `call_llm`.
+| Link | Binds | Dispatch |
+|---|---|---|
+| `.add_tools_from_self()` | this agent's own `tf.add_mcp_tool` handlers | local, in-process |
+| `.add_tools_from_agent(name)` | another agent's published tools **in this factory** | over the wire (request/response rows) |
+| `.add_tool(fn_or_name)` | a single callable, or a named local MCP tool | local |
+
+**Loop controls:**
+
+| Link | Effect |
+|---|---|
+| `.max_turns(n)` | Hard cap on turns — **the sole runaway guard**. There is no repeat/stuck detector; a uselessly-looping model runs until `max_turns`, then stops with `max_turns_reached=True` |
+| `.on_turn(cb)` | Called after each turn with `{turn, tool_calls, usage}` — for live progress. Exceptions in the callback are logged and swallowed |
+| `.inject_tool_args(mapping, tools=None)` | Force these args into tool calls **at dispatch time**, hidden from the model's `inputSchema`. `tools=` limits which tools get the injection (`None` = all). Used for forced provenance (e.g. stamping a `source` onto every mutating tool) |
+
+The `_with_meta` loop terminal's `meta` carries the same single-shot fields
+**plus** loop-level signals:
+
+```python
+meta["turns"]              # per-turn dicts: {turn, tool_calls (names), usage}
+meta["tool_calls"]         # flat list across the run: [{name, args, result}, ...]
+meta["max_turns_reached"]  # bool — the ONLY loop-level signal with no provider analog
+meta["usage"]              # folded across all turns (tokens + cache counts summed)
+```
+
+`max_turns_reached` is the single runaway signal; `finish_reason` still
+reflects the last turn's provider value.
+
+!!! note "Provider support for the agentic loop"
+    `.run_agent_loop*` requires native `bind_tools`: **openai**,
+    **openrouter**, **digitalocean** (all `ChatOpenAI`), **anthropic**, and
+    **google**. **Ollama** is partial. **Azure o3** is unsupported — the loop
+    raises a `NotImplementedError` capability error telling you to use `.ask*`
+    or switch provider. `.ask*` and `tf.embed` work on **all** providers.
+
+**Reliability layer (built in, no config):**
+
+- **Serial multi-tool dispatch** — when a turn returns several tool calls they
+  run one at a time, in order. No threads (matches tf's single-threaded
+  `run_pending` model).
+- **Arg validation fed back to the model** — a tool call with missing/wrong
+  args isn't dispatched; the validation error is returned as the tool result so
+  the model can correct itself.
+- **Tool errors fed back** — a handler that raises (or a wire timeout) returns
+  an `{"error": ...}` result rather than crashing the loop.
+- **Bounded history + per-result cap** — the message window is trimmed (system
+  prefix kept) and each tool result is capped; a truncated result carries an
+  explicit `[TRUNCATED — ... PARTIAL ...]` completeness marker so the model
+  knows it isn't the full output.
+- **API retry/backoff** — transient provider errors (429 / 5xx / overloaded /
+  timeout) are retried with exponential backoff, respecting
+  `tf.shutting_down()` so SIGTERM doesn't hang.
+
+!!! note "Prompt caching is always on"
+    There is no opt-in. The cacheable system+tools prefix is what makes it
+    effective in the loop. Anthropic-direct marks the system block with
+    `cache_control: ephemeral` (real, applied at the message layer);
+    OpenAI/OpenRouter prefix caching is automatic. OpenRouter within-run
+    provider stickiness (pinning later turns to the upstream that served turn 1
+    to preserve prefix caching) is **capture-only today** — the loop observes
+    the served upstream for visibility, but full pinning is a **TODO**, not yet
+    active. The loop is correct either way; this only affects cache-hit rate
+    on OpenRouter.
+
+!!! note "`tf.call_llm` is legacy"
+    `tf.call_llm(prompt, inputs, response_model=...)` is the **legacy**
+    single-shot API — still exported and byte-for-byte unchanged (it *is* the
+    `PydanticOutputParser` path that `tf.llm()` reuses as its structured-output
+    fallback), and it logs a debug deprecation breadcrumb. Migrate to
+    `tf.llm().ask(...)` (text) / `tf.llm().with_structured_output(M).ask(...)`
+    (structured). Note `call_llm` takes `provider=` (not `model_provider=`).
 
 ---
 
 ## Embeddings and vector search
 
-`tf.embed` turns text into a vector. Pass a single string for one vector, or a
-list of strings for a batch.
+`tf.embed(text)` turns text into a vector. It is **input-first and lazy**: the
+result **is** the vector — a `list` subclass that computes on first
+value-access (then memoises). Configure it with `.provider(...)` /
+`.model(...)` before use; the laziness is invisible — index it, iterate it, or
+pass it as `embedding=` and it resolves on demand. Pass a single string for one
+vector, or a list of strings for a batch.
 
 ```python
-vector  = tf.embed("some text to embed")            # → list[float]
-vectors = tf.embed(["text one", "text two"])         # → list[list[float]]
+vector  = tf.embed("some text to embed")            # → vector (list of floats)
+vectors = tf.embed(["text one", "text two"])         # → list of vectors
 
-# per-call provider/model override
-vector  = tf.embed("text", provider="openrouter", model="baai/bge-m3")
+# fluent per-call provider/model override
+vector  = tf.embed("text").provider("openrouter").model("baai/bge-m3")
+
+# with telemetry — .with_meta() resolves eagerly and returns (vector, meta)
+vector, meta = tf.embed("query").model("text-embedding-3-large").with_meta()
 ```
+
+`.with_meta()` returns `(vector, meta)` where `meta` has the same shape as the
+LLM [`meta` dict](#the-meta-dict) (`finish_reason` is always `None` for
+embeddings; `cost` is OpenRouter-only).
 
 The provider and model come from `DEFAULT_EMBEDDING_PROVIDER` and
 `DEFAULT_EMBEDDING_MODEL`.
+
+!!! note "`tf.embed(text, provider=, model=)` is legacy"
+    The old eager-kwargs form `tf.embed(text, provider=p, model=m)` still works
+    (it pre-configures the builder) and logs a debug deprecation breadcrumb.
+    Migrate to `tf.embed(text).provider(p).model(m)`.
 
 !!! note "Supported dimensions"
     Vectors are stored in fixed-dimension columns: **256, 512, 768, 1024,
@@ -630,7 +819,7 @@ when the key isn't in the store. It **never raises** — agents keep running eve
 if the store is briefly unreachable, falling back to the environment in that
 case. There is no `set` / `rotate` / `list`; writes happen through the
 dashboard. (LLM and embedding provider credentials are resolved this way for
-you automatically — you don't pass keys into `tf.call_llm` or `tf.embed`.)
+you automatically — you don't pass keys into `tf.llm()` or `tf.embed`.)
 
 ### Lifecycle
 
@@ -680,7 +869,7 @@ Everything exported from `import teenyfactories as tf`:
 |---|---|
 | Logging | `log_debug`, `log_info`, `log_warn`, `log_error`, `log_persona` |
 | Time / IDs | `get_timestamp`, `get_timestamp_utc`, `generate_unique_id` |
-| LLM | `call_llm` |
+| LLM | `llm`, `call_llm` (legacy) |
 | Embeddings | `embed` |
 | Secrets | `secrets` |
 | Data | `collection` |
@@ -712,23 +901,20 @@ Outputs: document → 'summarised'
 """
 import teenyfactories as tf
 from pydantic import BaseModel, Field
-from langchain_core.prompts import PromptTemplate
 
 
 class Summary(BaseModel):
     summary: str = Field(description="One-paragraph summary")
 
 
-PROMPT = PromptTemplate.from_template(
-    "Summarise this document:\n{text}\n{format_instructions}"
-)
-
-
 @tf.on_state('document', 'loaded').do
 def summarise(item):
     tf.log_persona(f"Summarising {item['key']}...")
-    result = tf.call_llm(PROMPT, {"text": item['data']['text']},
-                         response_model=Summary)
+    result = (
+        tf.llm()
+        .with_structured_output(Summary)
+        .ask("Summarise this document:\n{text}", {"text": item['data']['text']})
+    )
     tf.collection('document').set(
         item['key'],
         state='summarised',

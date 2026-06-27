@@ -10,7 +10,7 @@ import teenyfactories as tf
 # An agent: subscribe to a state, do work, advance the state.
 @tf.on_state('documents', 'loaded').do
 def analyse(item):
-    summary = tf.call_llm("Summarise this document", {"doc": item['data']['text']})
+    summary = tf.llm().ask("Summarise this document: {doc}", {"doc": item['data']['text']})
     tf.collection('documents').set(item['key'], state='analysed',
                                    data={**item['data'], 'summary': summary})
 
