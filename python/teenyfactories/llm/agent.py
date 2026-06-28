@@ -26,7 +26,7 @@ from . import caching
 # context window (replaces the librarian's hand-rolled scratchpad trim).
 _HISTORY_KEEP_MESSAGES = 40
 _TOOL_RESULT_CAP_CHARS = 12000
-_WIRE_TIMEOUT_S = 30.0
+_WIRE_TIMEOUT_S = 90.0  # over-wire tools may be LLM-backed (e.g. a broker RFI) — allow for a model round-trip under load
 _API_RETRIES = 3
 
 
