@@ -26,7 +26,7 @@ Writing a row with a given state fires `NOTIFY {factory}.{collection}.{state}`. 
 |---|---|
 | Pub/sub | `on_state`, `on_message`, `send_message`, `run_pending` |
 | Data | `collection` (`.set`, `.add`, `.get`, `.get_all`, `.remove`, `.count`, `.exists`, `.vector_search`) |
-| LLM | `call_llm`, `embed` |
+| LLM | `llm` (fluent builder — `.ask` / `.run_agent_loop`), `call_llm` (LEGACY), `embed` |
 | MCP | `add_mcp_server`, `add_mcp_tool` |
 | Schedule | `on_schedule.every(N).<unit>.do(handler)` |
 | Logging | `log_debug`, `log_info`, `log_warn`, `log_error`, `log_persona` |

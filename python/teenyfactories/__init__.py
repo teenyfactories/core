@@ -40,7 +40,7 @@ from .logging import log_debug, log_info, log_warn, log_error, log_persona
 from .utils import get_timestamp, get_timestamp_utc, generate_unique_id
 
 # LLM
-from .llm import call_llm
+from .llm import call_llm, llm
 
 # Secrets — pull from orchestrator's in-built secrets store with env-var fallback.
 from .secrets import secrets
@@ -125,7 +125,7 @@ __all__ = [
     'get_timestamp', 'get_timestamp_utc', 'generate_unique_id',
 
     # LLM
-    'call_llm',
+    'call_llm', 'llm',
 
     # Secrets
     'secrets',
