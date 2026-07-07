@@ -14,6 +14,7 @@ project's minify-safe-names discipline.
 from typing import Optional
 from teenyfactories import config
 from teenyfactories.llm.base import LLMProvider
+from teenyfactories.logging import log_warn
 
 
 # Model-ID substrings whose presence means the model rejects `temperature`.
@@ -52,8 +53,10 @@ class AnthropicProvider(LLMProvider):
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        extra_body: Optional[dict] = None,
     ):
         """Get Anthropic LLM client. Optional overrides for model + temperature + max_tokens.
+        `extra_body` is ignored (OpenAI-compatible providers only) — logs a warning if passed.
 
         If the resolved model is in `ANTHROPIC_NO_TEMPERATURE_MODELS`, the
         temperature kwarg is omitted (Anthropic returns 400 otherwise). The
@@ -69,6 +72,9 @@ class AnthropicProvider(LLMProvider):
             from langchain_anthropic import ChatAnthropic
         except ImportError:
             raise ImportError("langchain-anthropic not available - install with 'pip install langchain-anthropic'")
+
+        if extra_body:
+            log_warn("tf.llm().with_extra_body ignored for anthropic — OpenAI-compatible providers only (openai/openrouter/digitalocean)")
 
         resolved_model = model or config.require_llm_model()
 

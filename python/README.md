@@ -18,20 +18,22 @@ while True:
     tf.sleep(1)
 ```
 
-Writing a row with a given state fires `NOTIFY {factory}.{collection}.{state}`. Every subscriber to that pair gets the row. That's the framework.
+Writing a row into a `(collection, state)` makes every subscriber to that pair pick it up: `(collection, state)` is a FIFO queue, and the handler consumes a row by transitioning its state (or deleting it). That's the framework.
 
 ## Public API
 
 | Group | Names |
 |---|---|
-| Pub/sub | `on_state`, `on_message`, `send_message`, `run_pending` |
-| Data | `collection` (`.set`, `.add`, `.get`, `.get_all`, `.remove`, `.count`, `.exists`, `.vector_search`) |
-| LLM | `llm` (fluent builder — `.ask` / `.run_agent_loop`), `call_llm` (LEGACY), `embed` |
+| Pub/sub | `on_state`, `run_pending` (the only pub/sub primitive — no message bus) |
+| Data | `collection` (`.set`, `.add`, `.get`, `.get_all`, `.remove`, `.count`, `.exists`, `.first`, `.state`, `.where`, `.vector_search`), `embed` |
+| LLM | `llm` (fluent builder — `.ask` / `.run_agent_loop`), `call_llm` (LEGACY) |
 | MCP | `add_mcp_server`, `add_mcp_tool` |
 | Schedule | `on_schedule.every(N).<unit>.do(handler)` |
+| Secrets / files | `secrets`, `bucket_store` (+ `BucketStoreError` family) |
 | Logging | `log_debug`, `log_info`, `log_warn`, `log_error`, `log_persona` |
 | Time / IDs | `get_timestamp`, `get_timestamp_utc`, `generate_unique_id` |
-| Util | `sleep`, `PROJECT_NAME`, `FACTORY_PREFIX`, `__version__` |
+| Debug | `breakpoint` |
+| Lifecycle / config | `sleep`, `shutting_down`, `FACTORY_NAME`, `AGENT_NAME`, `AGENT_SLUG`, `AGENT_ID`, `__version__` |
 
 Anything not in this list is not part of the supported surface — don't reach into submodules.
 

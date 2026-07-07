@@ -59,6 +59,7 @@ class LLMProvider(ABC):
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        extra_body: Optional[dict] = None,
     ):
         """Return a LangChain-compatible client. `model` overrides DEFAULT_LLM_MODEL.
 
@@ -66,6 +67,13 @@ class LLMProvider(ABC):
         constructor per provider (never mutating a shared client). `max_tokens`
         caps OUTPUT tokens; when None the provider/langchain default applies and
         nothing is passed to the client.
+
+        `extra_body`, when set, is a dict of extra attributes merged into the
+        request body. Honoured only by the OpenAI-compatible providers
+        (openai / openrouter / digitalocean) — forwarded verbatim via
+        ChatOpenAI's `extra_body` (e.g. OpenRouter provider-routing prefs,
+        top_p, seed). Providers on non-OpenAI SDKs (anthropic / google / ollama
+        / azure_bedrock) log a warning and ignore it.
         """
 
     @abstractmethod
@@ -152,6 +160,7 @@ def get_llm_client(
     model: Optional[str] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
+    extra_body: Optional[dict] = None,
 ):
     """
     Return a LangChain-compatible LLM client.
@@ -169,8 +178,13 @@ def get_llm_client(
                      nothing to the client, so the provider/langchain default
                      applies (e.g. ChatAnthropic's 1024). Mapped to each
                      provider's native kwarg.
+        extra_body:  Optional dict of extra request-body attributes, merged in
+                     by OpenAI-compatible providers only (openai / openrouter /
+                     digitalocean). Ignored-with-warning on other providers.
     """
-    return _get_provider_instance(provider).get_client(model=model, temperature=temperature, max_tokens=max_tokens)
+    return _get_provider_instance(provider).get_client(
+        model=model, temperature=temperature, max_tokens=max_tokens, extra_body=extra_body
+    )
 
 
 def _get_model_name(provider: Optional[str] = None, model: Optional[str] = None) -> str:
