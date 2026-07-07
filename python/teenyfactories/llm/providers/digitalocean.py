@@ -75,6 +75,7 @@ class DigitalOceanProvider(LLMProvider):
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        extra_body: Optional[dict] = None,
     ):
         """Get a DigitalOcean Gradient AI LLM client. Optional overrides for model + temperature + max_tokens.
 
@@ -109,6 +110,8 @@ class DigitalOceanProvider(LLMProvider):
 
         if max_tokens is not None:
             client_kwargs['max_tokens'] = max_tokens
+        if extra_body:
+            client_kwargs['extra_body'] = dict(extra_body)
 
         return ChatOpenAI(**client_kwargs)
 

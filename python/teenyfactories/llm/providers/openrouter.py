@@ -70,6 +70,7 @@ class OpenRouterProvider(LLMProvider):
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        extra_body: Optional[dict] = None,
     ):
         """Get an OpenRouter LLM client. Optional overrides for model + temperature + max_tokens.
 
@@ -103,7 +104,9 @@ class OpenRouterProvider(LLMProvider):
             # a static table can't predict the real spend. This is metadata
             # capture, not tf-side pricing (tf computes no cost). ChatOpenAI
             # forwards `extra_body` verbatim into the chat/completions POST.
-            "extra_body": {"usage": {"include": True}},
+            # Caller-supplied `extra_body` (e.g. provider-routing prefs) merges
+            # on top — a distinct `provider` key won't collide with `usage`.
+            "extra_body": {"usage": {"include": True}, **(extra_body or {})},
         }
 
         if not _model_rejects_temperature(resolved_model):
