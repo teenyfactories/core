@@ -300,7 +300,11 @@ def run_agent_loop(builder, task, with_meta=False):
     request_id = str(uuid.uuid4())
 
     client = base.get_llm_client(
-        builder._provider, model=builder._model, temperature=builder._temperature, max_tokens=builder._max_tokens
+        builder._provider,
+        model=builder._model,
+        temperature=builder._temperature,
+        max_tokens=builder._max_tokens,
+        extra_body=builder._extra_body or None,
     )
     if not hasattr(client, "bind_tools"):
         raise NotImplementedError(

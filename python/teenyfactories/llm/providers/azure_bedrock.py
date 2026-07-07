@@ -4,6 +4,7 @@ import urllib.parse
 from typing import Optional
 from teenyfactories import config
 from teenyfactories.llm.base import LLMProvider
+from teenyfactories.logging import log_warn
 
 
 class AzureBedrockProvider(LLMProvider):
@@ -36,9 +37,11 @@ class AzureBedrockProvider(LLMProvider):
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        extra_body: Optional[dict] = None,
     ):
         """Get Azure Bedrock LLM client. Optional overrides for model + temperature + max_tokens.
         o3 models silently ignore the temperature override (the SDK rejects it).
+        `extra_body` is ignored (OpenAI-compatible providers only) — logs a warning if passed.
 
         `max_tokens` (when set) caps output tokens. For standard models it maps
         to AzureChatOpenAI's `max_tokens`; for o3 reasoning models it maps to
@@ -48,6 +51,9 @@ class AzureBedrockProvider(LLMProvider):
             from langchain_openai import AzureChatOpenAI
         except ImportError:
             raise ImportError("langchain-openai not available - install with 'pip install langchain-openai'")
+
+        if extra_body:
+            log_warn("tf.llm().with_extra_body ignored for azure_bedrock — OpenAI-compatible providers only (openai/openrouter/digitalocean)")
 
         deployment = model or self.azure_deployment
 

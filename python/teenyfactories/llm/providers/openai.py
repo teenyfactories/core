@@ -13,11 +13,15 @@ class OpenAIProvider(LLMProvider):
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        extra_body: Optional[dict] = None,
     ):
         """Get OpenAI LLM client. Optional overrides for model + temperature + max_tokens.
 
         `max_tokens` (when set) caps output tokens via ChatOpenAI's `max_tokens`
         kwarg; when None nothing is passed and the provider default applies.
+
+        `extra_body` (when set) is forwarded verbatim into the chat/completions
+        POST via ChatOpenAI's `extra_body` (e.g. top_p, seed).
         """
         try:
             from langchain_openai import ChatOpenAI
@@ -31,6 +35,8 @@ class OpenAIProvider(LLMProvider):
         }
         if max_tokens is not None:
             client_kwargs['max_tokens'] = max_tokens
+        if extra_body:
+            client_kwargs['extra_body'] = dict(extra_body)
 
         return ChatOpenAI(**client_kwargs)
 

@@ -41,6 +41,7 @@ class LLMBuilder:
         self._max_tokens: Optional[int] = None
         self._system: Optional[str] = None
         self._structured: Optional[Type] = None
+        self._extra_body: dict = {}
         # agentic config (Phase 2)
         self._tool_sources: list = []
         self._extra_tools: list = []
@@ -72,6 +73,21 @@ class LLMBuilder:
 
     def with_structured_output(self, model: Type) -> "LLMBuilder":
         self._structured = model
+        return self
+
+    def with_extra_body(self, params: dict) -> "LLMBuilder":
+        """Merge extra attributes into the outgoing request body. Honoured only
+        by OpenAI-compatible providers (openrouter / openai / digitalocean),
+        which forward it verbatim via ChatOpenAI's ``extra_body`` — e.g.
+        OpenRouter provider-routing prefs, top_p, seed:
+
+            tf.llm().provider('openrouter').model('nvidia/nemotron-...')
+                .with_extra_body({'provider': {'sort': 'throughput'}})
+
+        Non-OpenAI-SDK providers (anthropic / google / ollama / azure_bedrock)
+        log a warning and ignore it. Repeated calls shallow-merge (later keys
+        win)."""
+        self._extra_body.update(params or {})
         return self
 
     # ── agentic config (Phase 2 — recorded now, consumed by the loop later) ───
@@ -142,6 +158,7 @@ class LLMBuilder:
                 model=self._model,
                 temperature=self._temperature,
                 max_tokens=self._max_tokens,
+                extra_body=self._extra_body or None,
             )
             template = self._build_template(prompt)
 
