@@ -25,14 +25,19 @@ Per-call overrides for both `provider` and `model` are accepted; useful for
 factories that want to mix model sizes (e.g. small for chunks, large for
 queries) without changing the global default.
 
-Usage:
+Usage (input-first, lazy — the result IS the vector, computed on first access):
     import teenyfactories as tf
 
     vector  = tf.embed("some text")
     vectors = tf.embed(["text 1", "text 2", "text 3"])
-    vector  = tf.embed("query", model="text-embedding-3-large")
-    vector  = tf.embed("local", provider="ollama", model="nomic-embed-text")
-    vector  = tf.embed("via OpenRouter", provider="openrouter", model="baai/bge-m3")
+    vector  = tf.embed("query").model("text-embedding-3-large")
+    vector  = tf.embed("local").provider("ollama").model("nomic-embed-text")
+    vector  = tf.embed("via OpenRouter").provider("openrouter").model("baai/bge-m3")
+    vector, meta = tf.embed("query").with_meta()
+
+LEGACY: the eager kwargs form `tf.embed(text, provider=, model=)` still works
+(it pre-configures the builder) and logs a debug deprecation breadcrumb; migrate
+to `tf.embed(text).provider(p).model(m)`.
 """
 
 import time
@@ -40,6 +45,7 @@ import uuid
 from typing import List, Optional, Union
 
 from . import config
+from .logging import log_debug
 
 
 def _log_embed_usage(
@@ -89,37 +95,127 @@ def embed(
     text: Union[str, List[str]],
     provider: Optional[str] = None,
     model: Optional[str] = None,
-) -> Union[List[float], List[List[float]]]:
-    """Generate embedding vector(s) for text.
+) -> "_Embedding":
+    """Embed text — input-first, lazy. The result *is* the vector (a ``list``
+    subclass) for a single string, or a list-of-vectors for a list input; it
+    computes on first value-access (memoised).
 
-    Args:
-        text:     A single string or list of strings to embed.
-        provider: Override DEFAULT_EMBEDDING_PROVIDER for this call.
-        model:    Override DEFAULT_EMBEDDING_MODEL for this call.
+        vec        = tf.embed("hello")                    # -> vector (list)
+        vec        = tf.embed("hi").model("baai/bge-m3")  # configured, still a vector
+        vec, meta  = tf.embed("hi").with_meta()           # -> (vector, meta-dict)
+        vecs       = tf.embed(["a", "b"])                 # -> list-of-vectors
 
-    Returns:
-        A single vector (list of floats) if input is a string, or a list of
-        vectors if input is a list of strings.
+    LEGACY: the old eager ``tf.embed(text, provider=, model=)`` kwargs still work
+    (they pre-configure the builder); migrate to ``tf.embed(text).provider(p).model(m)``.
     """
+    if provider is not None or model is not None:
+        # LEGACY: kwargs form — debug for now; will become a warn before removal.
+        log_debug(
+            "🔢 tf.embed(text, provider=, model=) kwargs are LEGACY — "
+            "migrate to tf.embed(text).provider(p).model(m)"
+        )
+    return _Embedding(text, provider, model)
+
+
+def _embed_compute(text, provider, model):
+    """Eager embed (the original dispatch). Returns ``(result, meta)`` where
+    result is a vector (str input) or list-of-vectors (list input), and meta is
+    the read-view dict {provider, model, cost, finish_reason, latency_ms, usage, raw}."""
     used_provider = provider or config.require_embedding_provider()
     used_model = model or config.require_embedding_model()
 
     single = isinstance(text, str)
-    texts = [text] if single else text
+    texts = [text] if single else list(text or [])
 
     if not texts:
-        return [] if not single else []
-
-    if used_provider == "openai":
-        vectors = _embed_openai(texts, used_model)
+        usage = {"provider": used_provider, "model": used_model, "input_tokens": 0, "cost": None, "latency_ms": 0}
+    elif used_provider == "openai":
+        vectors, usage = _embed_openai(texts, used_model)
     elif used_provider == "ollama":
-        vectors = _embed_ollama(texts, used_model)
+        vectors, usage = _embed_ollama(texts, used_model)
     elif used_provider == "openrouter":
-        vectors = _embed_openrouter(texts, used_model)
+        vectors, usage = _embed_openrouter(texts, used_model)
     else:
         raise ValueError(f"Unknown embedding provider: {used_provider}")
 
-    return vectors[0] if single else vectors
+    result = [] if not texts else (vectors[0] if single else vectors)
+    meta = {
+        "provider": used_provider,
+        "model": used_model,
+        "cost": usage.get("cost"),
+        "finish_reason": None,
+        "latency_ms": usage.get("latency_ms"),
+        "usage": {"input_tokens": usage.get("input_tokens")},
+        "raw": {},
+    }
+    return result, meta
+
+
+class _Embedding(list):
+    """Lazy, input-first embedding result. Behaves as the vector (or list-of-
+    vectors for batch input); computes on first value-access. Configure with
+    ``.model()`` / ``.provider()`` before use; ``.with_meta()`` resolves to
+    ``(vector, meta)``. A pure value — no side effects — so laziness is safe
+    (a list subclass consumed via the list protocol)."""
+
+    def __init__(self, text, provider=None, model=None):
+        super().__init__()
+        self._text = text
+        self._provider = provider
+        self._model = model
+        self._resolved = False
+        self._meta = None
+
+    def model(self, name):
+        self._model = name
+        return self
+
+    def provider(self, name):
+        self._provider = name
+        return self
+
+    def with_meta(self):
+        self._resolve()
+        return (self, self._meta)
+
+    def _resolve(self):
+        if self._resolved:
+            return
+        self._resolved = True  # set first so populate can't recurse via list protocol
+        result, meta = _embed_compute(self._text, self._provider, self._model)
+        list.extend(self, result)
+        self._meta = meta
+
+    # resolution triggers — anything that reads the value
+    def __len__(self):
+        self._resolve()
+        return super().__len__()
+
+    def __iter__(self):
+        self._resolve()
+        return super().__iter__()
+
+    def __getitem__(self, i):
+        self._resolve()
+        return super().__getitem__(i)
+
+    def __contains__(self, x):
+        self._resolve()
+        return super().__contains__(x)
+
+    def __eq__(self, other):
+        self._resolve()
+        return list(self) == other
+
+    def __repr__(self):
+        self._resolve()
+        return super().__repr__()
+
+    def __bool__(self):
+        self._resolve()
+        return super().__len__() > 0
+
+    __hash__ = None
 
 
 def _embed_openai(texts: List[str], model: str) -> List[List[float]]:
@@ -133,6 +229,7 @@ def _embed_openai(texts: List[str], model: str) -> List[List[float]]:
 
     # Batch in groups of 100 (OpenAI limit)
     all_vectors = []
+    total_in, total_lat = 0, 0
     for i in range(0, len(texts), 100):
         batch = texts[i : i + 100]
         start = time.time()
@@ -146,8 +243,16 @@ def _embed_openai(texts: List[str], model: str) -> List[List[float]]:
         if input_tokens is None and usage is not None:
             input_tokens = getattr(usage, "total_tokens", 0) or 0
         _log_embed_usage("openai", model, input_tokens or 0, latency_ms, preview)
+        total_in += input_tokens or 0
+        total_lat += latency_ms
 
-    return all_vectors
+    return all_vectors, {
+        "provider": "openai",
+        "model": model,
+        "input_tokens": total_in,
+        "cost": None,
+        "latency_ms": total_lat,
+    }
 
 
 def _embed_openrouter(texts: List[str], model: str) -> List[List[float]]:
@@ -182,6 +287,7 @@ def _embed_openrouter(texts: List[str], model: str) -> List[List[float]]:
 
     # Batch in groups of 100 (mirrors the OpenAI batch limit).
     all_vectors = []
+    total_in, total_lat, total_cost, saw_cost = 0, 0, 0.0, False
     for i in range(0, len(texts), 100):
         batch = texts[i : i + 100]
         start = time.time()
@@ -202,11 +308,20 @@ def _embed_openrouter(texts: List[str], model: str) -> List[List[float]]:
         # OpenRouter returns the actual routed cost (USD) on usage.cost when
         # usage.include is set; store it verbatim for read-time pricing.
         actual_cost = getattr(usage, "cost", None) if usage else None
-        _log_embed_usage(
-            "openrouter", model, input_tokens or 0, latency_ms, preview, actual_cost=actual_cost
-        )
+        _log_embed_usage("openrouter", model, input_tokens or 0, latency_ms, preview, actual_cost=actual_cost)
+        total_in += input_tokens or 0
+        total_lat += latency_ms
+        if actual_cost is not None:
+            total_cost += actual_cost
+            saw_cost = True
 
-    return all_vectors
+    return all_vectors, {
+        "provider": "openrouter",
+        "model": model,
+        "input_tokens": total_in,
+        "cost": (total_cost if saw_cost else None),
+        "latency_ms": total_lat,
+    }
 
 
 def _embed_ollama(texts: List[str], model: str) -> List[List[float]]:
@@ -217,6 +332,7 @@ def _embed_ollama(texts: List[str], model: str) -> List[List[float]]:
 
     preview = texts[0] if texts else ""
     all_vectors = []
+    total_lat = 0
     for text in texts:
         start = time.time()
         response = requests.post(
@@ -229,5 +345,6 @@ def _embed_ollama(texts: List[str], model: str) -> List[List[float]]:
 
         # Ollama doesn't return token counts for embeddings — log 0.
         _log_embed_usage("ollama", model, 0, latency_ms, preview)
+        total_lat += latency_ms
 
-    return all_vectors
+    return all_vectors, {"provider": "ollama", "model": model, "input_tokens": 0, "cost": None, "latency_ms": total_lat}

@@ -137,7 +137,13 @@ class Collection:
         - embedding: optional vector, routed to factory_vectors / dim column.
 
         On INSERT, omitted state defaults to 'new', omitted data defaults to {}.
-        On UPDATE, only the fields you pass are changed; the rest are preserved.
+        On UPDATE, each argument you pass replaces that column outright; arguments
+        you omit are left untouched. There is NO field-level merge inside the JSONB:
+        passing `data=` REPLACES the entire value blob. A handler advancing a row
+        while setting one field must spread the existing payload or it wipes the
+        rest: `set(key, state='processed', data={**item['data'], 'analysed': True})`.
+        The lone exception is a state-only write (no `data=`), which preserves the
+        existing value and only transitions state.
 
         Returns the key (unchanged).
         """

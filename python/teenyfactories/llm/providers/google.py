@@ -3,6 +3,7 @@
 from typing import Optional
 from teenyfactories import config
 from teenyfactories.llm.base import LLMProvider
+from teenyfactories.logging import log_warn
 
 
 class GoogleProvider(LLMProvider):
@@ -13,8 +14,10 @@ class GoogleProvider(LLMProvider):
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        extra_body: Optional[dict] = None,
     ):
         """Get Google Gemini LLM client. Optional overrides for model + temperature + max_tokens.
+        `extra_body` is ignored (OpenAI-compatible providers only) — logs a warning if passed.
 
         `max_tokens` (when set) caps output tokens via
         ChatGoogleGenerativeAI's `max_output_tokens` kwarg; when None nothing
@@ -24,6 +27,9 @@ class GoogleProvider(LLMProvider):
             from langchain_google_genai import ChatGoogleGenerativeAI
         except ImportError:
             raise ImportError("langchain-google-genai not available - install with 'pip install langchain-google-genai'")
+
+        if extra_body:
+            log_warn("tf.llm().with_extra_body ignored for google — OpenAI-compatible providers only (openai/openrouter/digitalocean)")
 
         client_kwargs = {
             'google_api_key': config.require_api_key('google'),

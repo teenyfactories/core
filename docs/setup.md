@@ -6,7 +6,7 @@ This page gets you from zero to a running factory. There are two ways to run: **
 
 - **Docker** + **Docker Compose** — every agent runs as a container.
 - **Python 3.11+** — only if you want to develop/lint agent code locally (the runtime is the container image).
-- An **LLM provider key** for any agent that calls `tf.call_llm` (OpenAI, Anthropic, Google, Azure Bedrock, or a local Ollama).
+- An **LLM provider key** for any agent that calls `tf.llm()` (OpenAI, Anthropic, Google, Azure Bedrock, or a local Ollama).
 
 ## Install the library
 
@@ -81,8 +81,8 @@ import teenyfactories as tf
 @tf.on_state('greeting', 'requested').do
 def greet(item):
     name = item['data'].get('name', 'world')
-    message = tf.call_llm("Write a one-line friendly greeting for the given name.",
-                          {"name": name})
+    message = tf.llm().ask("Write a one-line friendly greeting for {name}.",
+                           {"name": name})
     tf.collection('greeting').set(item['key'], state='done',
                                   data={'name': name, 'message': message})
 
@@ -118,7 +118,7 @@ Agents read configuration from environment variables. The most common:
 | Variable | Purpose |
 |---|---|
 | `DEFAULT_LLM_PROVIDER` | `openai` · `anthropic` · `google` · `ollama` · `azure_bedrock` |
-| `DEFAULT_LLM_MODEL` | Model name (also overridable per call via `tf.call_llm(..., model=...)`) |
+| `DEFAULT_LLM_MODEL` | Model name (also overridable per call via `tf.llm().model(...)`) |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` | Provider credentials |
 | `DEFAULT_EMBEDDING_PROVIDER` | `openai` · `ollama` · `openrouter` |
 | `DEFAULT_EMBEDDING_MODEL` | e.g. `text-embedding-3-small` |

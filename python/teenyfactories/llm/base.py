@@ -59,6 +59,7 @@ class LLMProvider(ABC):
         model: Optional[str] = None,
         temperature: Optional[float] = None,
         max_tokens: Optional[int] = None,
+        extra_body: Optional[dict] = None,
     ):
         """Return a LangChain-compatible client. `model` overrides DEFAULT_LLM_MODEL.
 
@@ -66,6 +67,13 @@ class LLMProvider(ABC):
         constructor per provider (never mutating a shared client). `max_tokens`
         caps OUTPUT tokens; when None the provider/langchain default applies and
         nothing is passed to the client.
+
+        `extra_body`, when set, is a dict of extra attributes merged into the
+        request body. Honoured only by the OpenAI-compatible providers
+        (openai / openrouter / digitalocean) — forwarded verbatim via
+        ChatOpenAI's `extra_body` (e.g. OpenRouter provider-routing prefs,
+        top_p, seed). Providers on non-OpenAI SDKs (anthropic / google / ollama
+        / azure_bedrock) log a warning and ignore it.
         """
 
     @abstractmethod
@@ -152,6 +160,7 @@ def get_llm_client(
     model: Optional[str] = None,
     temperature: Optional[float] = None,
     max_tokens: Optional[int] = None,
+    extra_body: Optional[dict] = None,
 ):
     """
     Return a LangChain-compatible LLM client.
@@ -169,9 +178,12 @@ def get_llm_client(
                      nothing to the client, so the provider/langchain default
                      applies (e.g. ChatAnthropic's 1024). Mapped to each
                      provider's native kwarg.
+        extra_body:  Optional dict of extra request-body attributes, merged in
+                     by OpenAI-compatible providers only (openai / openrouter /
+                     digitalocean). Ignored-with-warning on other providers.
     """
     return _get_provider_instance(provider).get_client(
-        model=model, temperature=temperature, max_tokens=max_tokens
+        model=model, temperature=temperature, max_tokens=max_tokens, extra_body=extra_body
     )
 
 
@@ -323,6 +335,31 @@ def _extract_token_info(result) -> dict:
     return {"raw": raw}
 
 
+def _meta_from_raw(raw, provider, model, latency_ms) -> dict:
+    """Assemble the returnable `meta` dict (a READ-VIEW over the verbatim `raw`
+    blob — it does NOT reshape the stored raw). All fields are best-effort and
+    may be None: `cost` is OpenRouter-only; `usage`/`finish_reason` shapes are
+    provider-dependent. Consumed by tf.llm().ask_with_meta / tf.embed().with_meta.
+
+      meta = {provider, model, cost, finish_reason, latency_ms, usage, raw}
+      usage = verbatim LangChain usage_metadata
+              (input_tokens/output_tokens/total_tokens/input_token_details{...}/...)
+    """
+    raw = raw or {}
+    usage = raw.get("usage_metadata") or {}
+    rmeta = raw.get("response_metadata") or {}
+    token_usage = rmeta.get("token_usage") or {}
+    return {
+        "provider": provider,
+        "model": rmeta.get("model_name") or model,
+        "cost": token_usage.get("cost"),  # OpenRouter reports this; None elsewhere
+        "finish_reason": rmeta.get("finish_reason"),
+        "latency_ms": latency_ms,
+        "usage": usage,  # verbatim usage_metadata
+        "raw": raw,
+    }
+
+
 def _build_prompt_preview(prompt_template, prompt_inputs) -> str:
     """Best-effort render of the resolved prompt for the usage log."""
     try:
@@ -355,10 +392,14 @@ def _record_call_usage(*, provider, model, token_info, duration_ms, prompt_templ
 
 
 # =============================================================================
-# Public: call_llm
+# Public: call_llm — LEGACY
 # =============================================================================
 
 
+# LEGACY: superseded by the fluent `tf.llm().ask()` / `.ask_with_meta()` builder
+# (teenyfactories/llm/builder.py). Left byte-for-byte — this IS the
+# PydanticOutputParser structured-output path, which the builder reuses as its
+# fallback. Remove once all call sites migrate to tf.llm() (call_llm-sweep epic).
 def call_llm(
     prompt_template,
     prompt_inputs,
@@ -404,6 +445,8 @@ def call_llm(
         Exception: any failure in client construction, invocation, or parsing.
                    Usage is still recorded in the finally block.
     """
+    # LEGACY: deprecation breadcrumb (debug for now; will become a warn before removal).
+    log_debug("💬 call_llm() is LEGACY and will be deprecated — migrate to tf.llm().ask() / .ask_with_meta()")
     start_time = time.time()
     success = False
     error_message = None
@@ -419,6 +462,7 @@ def call_llm(
         # hiccup never blocks real work. See teenyfactories/cost_clearance.py.
         try:
             from teenyfactories.cost_clearance import check_and_pause as _clearance_gate
+
             _clearance_gate()
         except Exception as clearance_err:
             log_warn(f"💬 LLM clearance check unavailable (proceeding): {clearance_err}")
