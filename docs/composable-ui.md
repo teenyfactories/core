@@ -6,15 +6,14 @@ renders it from a library of **composable components**: tables, charts, forms,
 metrics, modals, a chat panel, and the layout primitives that arrange them.
 
 This page is the authoring contract: how to write a `default_ui`, how components
-bind to your factory's data, and how to wire buttons to actions. The headline
-principle to keep in mind throughout:
+bind to your factory's data, and how to wire buttons to actions. One principle
+worth keeping in mind:
 
-!!! tip "The building blocks just work"
-    Author your **desktop intent** with the layout primitives and let the engine
-    infer the axis, size the children, own the padding/scroll/spacing, and go
-    mobile on its own. You can build a full dashboard — including modals and
-    detail panels — with **zero `style:` blocks**. `style:` is a last-resort
-    raw-CSS escape hatch, not the default tool.
+!!! tip "Layout primitives handle sizing and responsiveness"
+    The layout primitives size their children and own the padding, scroll, and
+    spacing, and they adapt to mobile without extra configuration. Most
+    dashboards — including modals and detail panels — need no `style:` blocks.
+    `style:` is a raw-CSS escape for what the primitives can't express.
 
 ## What `default_ui` is
 

@@ -507,14 +507,15 @@ reflects the last turn's provider value.
 
 !!! note "Prompt caching is always on"
     There is no opt-in. The cacheable system+tools prefix is what makes it
-    effective in the loop. Anthropic-direct marks the system block with
-    `cache_control: ephemeral` (real, applied at the message layer);
-    OpenAI/OpenRouter prefix caching is automatic. OpenRouter within-run
-    provider stickiness (pinning later turns to the upstream that served turn 1
-    to preserve prefix caching) is **capture-only today** — the loop observes
-    the served upstream for visibility, but full pinning is a **TODO**, not yet
-    active. The loop is correct either way; this only affects cache-hit rate
-    on OpenRouter.
+    effective in the loop. Anthropic-direct marks two breakpoints at the message
+    layer: a static one on the system block and a rolling one on the last message
+    each turn (`cache_control: ephemeral`), so the growing tool-loop prefix caches
+    turn to turn. OpenAI/OpenRouter prefix caching is automatic per upstream; the
+    loop reuses a single client, so a caller's stable `extra_body` (e.g.
+    `provider.order`) rides every turn — best-effort consistent routing. tf does
+    not pin or auto-select an OpenRouter upstream (langchain-openai does not expose
+    the served upstream, so it can't be read back); a factory that needs hard
+    stickiness sets its own `provider.order`.
 
 !!! note "`tf.call_llm` is legacy"
     `tf.call_llm(prompt, inputs, response_model=...)` is the **legacy**
