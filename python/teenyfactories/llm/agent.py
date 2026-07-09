@@ -23,8 +23,11 @@ from . import base
 from . import caching
 
 # Bound the message history + per-tool-result size so a long run can't blow the
-# context window (replaces the librarian's hand-rolled scratchpad trim).
-_HISTORY_KEEP_MESSAGES = 40
+# context window (replaces the librarian's hand-rolled scratchpad trim). Hysteresis
+# watermarks: trim only when HIGH is exceeded, down to LOW, then hold stable — so the
+# prefix stays byte-identical across turns and the rolling tail cache keeps hitting.
+_HISTORY_HIGH_WATERMARK = 60
+_HISTORY_LOW_WATERMARK = 40
 _TOOL_RESULT_CAP_CHARS = 12000
 _WIRE_TIMEOUT_S = 90.0  # over-wire tools may be LLM-backed (e.g. a broker RFI) — allow for a model round-trip under load
 _API_RETRIES = 3
@@ -208,7 +211,8 @@ def _cap_tool_result(result) -> str:
     """JSON-encode a tool result, capping size with a completeness marker so the
     model knows when it's truncated (preserves the re-fetch-prevention signal)."""
     try:
-        s = result if isinstance(result, str) else json.dumps(result)
+        # sort_keys so tool-result key order can't shift the cached prefix.
+        s = result if isinstance(result, str) else json.dumps(result, sort_keys=True)
     except Exception:
         s = str(result)
     if len(s) > _TOOL_RESULT_CAP_CHARS:
@@ -218,14 +222,21 @@ def _cap_tool_result(result) -> str:
 
 def _trim_history(messages):
     """Keep the leading system message(s) + the most recent window so the context
-    can't grow unbounded over a long run."""
-    if len(messages) <= _HISTORY_KEEP_MESSAGES:
+    can't grow unbounded over a long run. Hysteresis: only trim once the HIGH
+    watermark is exceeded, chunk back to LOW, then hold stable — so the prefix stays
+    byte-identical between the rare trims and the rolling tail cache keeps hitting
+    (trimming every turn would shift the prefix and defeat it)."""
+    if len(messages) <= _HISTORY_HIGH_WATERMARK:
         return messages
-    from langchain_core.messages import SystemMessage
+    from langchain_core.messages import SystemMessage, ToolMessage
 
     head = [m for m in messages[:2] if isinstance(m, SystemMessage)]
-    tail = messages[-(_HISTORY_KEEP_MESSAGES - len(head)) :]
-    return head + tail
+    window = messages[-(_HISTORY_LOW_WATERMARK - len(head)) :]
+    # A window starting on a ToolMessage is an orphaned tool_result — its tool_use
+    # AIMessage got trimmed off. Anthropic rejects that (400). Drop leading orphans.
+    while window and isinstance(window[0], ToolMessage):
+        window = window[1:]
+    return head + window
 
 
 # ── usage folding ──────────────────────────────────────────────────────────────
@@ -332,18 +343,21 @@ def run_agent_loop(builder, task, with_meta=False):
     finish_reason = None
     max_turns_reached = False
     output = ""
-    pin = caching.StickyPin(used_provider)  # within-run OpenRouter provider pinning (best-effort)
+    # One client, reused every turn — a caller's stable extra_body (e.g. OpenRouter
+    # provider.order) rides every request unchanged, best-effort consistent routing
+    # so the upstream prefix-cache bites. tf does not auto-pin (see caching.py).
 
     for turn_idx in range(builder._max_turns):
-        active = pin.maybe_rebind(client, specs, bound, used_provider)
+        # Rolling cache breakpoint on the tail (Anthropic) — invoke on a marked copy
+        # so the persistent `messages` list stays marker-free.
+        invoke_msgs = caching.mark_cache_tail(messages, used_provider)
         t0 = time.time()
-        ai = _invoke_with_retry(active, messages)
+        ai = _invoke_with_retry(bound, invoke_msgs)
         turn_ms = int((time.time() - t0) * 1000)
 
         raw = base._extract_token_info(ai).get("raw") or {}
         _fold_usage(usage_agg, raw)
         finish_reason = (raw.get("response_metadata") or {}).get("finish_reason")
-        pin.observe(raw)
         _log_turn_usage(used_provider, used_model, raw, turn_ms, request_id)
 
         tool_names = [tc.get("name") for tc in (ai.tool_calls or [])]
