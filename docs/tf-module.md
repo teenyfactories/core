@@ -879,7 +879,9 @@ Everything exported from `import teenyfactories as tf`:
 | MCP | `add_mcp_server`, `add_mcp_tool` |
 | Bucket store | `bucket_store`, `BucketStoreError`, `BucketNotFoundError`, `BucketPermissionError`, `BucketConflictError` |
 | Lifecycle | `sleep`, `shutting_down` |
+| Stepped debugging | `breakpoint` |
 | Config | `FACTORY_NAME`, `AGENT_NAME`, `AGENT_SLUG`, `AGENT_ID` |
+| Version | `__version__` |
 
 If a name isn't in this list, it isn't part of the supported surface — don't
 reach into submodules.

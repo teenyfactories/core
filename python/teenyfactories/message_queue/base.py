@@ -31,7 +31,7 @@ is treated as fresh work and resets the count.
 
 Transport:
   * Dispatch is POLL-based. A poll scans ``factory_data`` for rows in each
-    subscribed ``(collection, state)`` ordered by ``(updated_at, key)``.
+    subscribed ``(collection, state)`` ordered by ``(state_changed_at, key)``.
   * NOTIFY on the single global ``tf_data_changed`` channel is an advisory
     wake ONLY — it never delivers or routes work. A poll pass runs when an
     own-factory NOTIFY was drained this tick, OR ``_SAFETY_POLL_INTERVAL_SEC``
@@ -490,7 +490,7 @@ def _poll_pass():
 
     Live (non-delayed) entries share one `fetch_rows` scan. Each delayed
     entry runs its own `fetch_due_rows` (the delay is a SQL predicate, no
-    cursor). In-retry rows interleave in natural updated_at position
+    cursor). In-retry rows interleave in natural state_changed_at position
     (accepted head-of-line tradeoff; slow-failing handlers should set
     their own I/O timeouts).
     """

@@ -299,7 +299,7 @@ config:
     - { field: total_amount,  label: Amount, format: number }
     - { field: classified_pct, label: Classified, format: percentage }
     - { field: fetched_at,    label: Fetched, format: relative_time }
-    - { field: is_paid,       label: Paid, kind: bool }       # ✓ / ✗ icon
+    - { field: is_paid,       label: Paid }                  # booleans render as ✓ / ✗ automatically
 ```
 
 Column headers are clickable to sort, and sorting is applied server-side across
@@ -353,7 +353,7 @@ config:
 component: bar_chart
 data: { collection: events }
 config:
-  group_by: source
+  series_field: source
   x_field: source
   y_field: count
   stacked: false                   # true to stack series within each x group
