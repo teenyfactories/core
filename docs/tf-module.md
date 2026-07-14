@@ -463,7 +463,8 @@ available (cut/parked — security + DB gated).
 
 | Link | Effect |
 |---|---|
-| `.max_turns(n)` | Hard cap on turns — **the sole runaway guard**. There is no repeat/stuck detector; a uselessly-looping model runs until `max_turns`, then stops with `max_turns_reached=True` |
+| `.max_turns(n)` | Hard cap on turns — the outermost runaway guard (default 50). A uselessly-looping model is *also* caught earlier by the repeat-error guardrail (see reliability layer); `max_turns` is the backstop. On hitting it the loop stops with `stop_reason='max_turns'` (and `max_turns_reached=True`), preserving the model's last text |
+| `.max_tokens(n)` | Per-turn output cap. **Omit and the loop applies a sane default of 8192** (not the provider's SDK default) so a low provider default — notably ChatAnthropic's 1024 — can't silently truncate tool-call JSON every turn. Override for turns that emit unusually large output |
 | `.on_turn(cb)` | Called after each turn with `{turn, tool_calls, usage}` — for live progress. Exceptions in the callback are logged and swallowed |
 | `.inject_tool_args(mapping, tools=None)` | Force these args into tool calls **at dispatch time**, hidden from the model's `inputSchema`. `tools=` limits which tools get the injection (`None` = all). Used for forced provenance (e.g. stamping a `source` onto every mutating tool) |
 
@@ -473,12 +474,18 @@ The `_with_meta` loop terminal's `meta` carries the same single-shot fields
 ```python
 meta["turns"]              # per-turn dicts: {turn, tool_calls (names), usage}
 meta["tool_calls"]         # flat list across the run: [{name, args, result}, ...]
-meta["max_turns_reached"]  # bool — the ONLY loop-level signal with no provider analog
+meta["max_turns_reached"]  # bool — True when the loop stopped at the turn cap
+meta["stop_reason"]        # why the loop ended: 'completed' | 'max_turns' | 'length' | 'repeat_error' | 'error'
+meta["error"]              # exception message when stop_reason == 'error', else None
 meta["usage"]              # folded across all turns (tokens + cache counts summed)
 ```
 
-`max_turns_reached` is the single runaway signal; `finish_reason` still
-reflects the last turn's provider value.
+`stop_reason` is the single field that tells you **why** the loop ended — prefer
+it over the older `max_turns_reached` bool (equivalent to
+`stop_reason == 'max_turns'`). `finish_reason` still reflects the last turn's
+verbatim provider value. Regardless of how the loop ends, `output` holds the
+model's **last non-empty text** — a max-turns / length / repeat-error stop
+preserves the model's final narration rather than returning `""`.
 
 !!! note "Provider support for the agentic loop"
     `.run_agent_loop*` requires native `bind_tools`: **openai**,
@@ -504,6 +511,21 @@ reflects the last turn's provider value.
 - **API retry/backoff** — transient provider errors (429 / 5xx / overloaded /
   timeout) are retried with exponential backoff, respecting
   `tf.shutting_down()` so SIGTERM doesn't hang.
+- **Repeat-error guardrail** — the same tool called with identical args, failing
+  3× (heuristic), triggers a corrective nudge to the model; one more identical
+  failure after the nudge terminates the loop early with
+  `stop_reason='repeat_error'` (preserving last text) instead of grinding to
+  `max_turns`.
+- **Truncation-aware** — if a turn's `finish_reason == 'length'` (output cut at
+  the token limit) the loop stops with `stop_reason='length'` and preserves the
+  partial text, rather than dispatching possibly-malformed truncated tool-call
+  JSON. The default 8192 output cap (overridable via `.max_tokens()`) is the
+  headroom that keeps this rare.
+- **Partial progress on failure** — a non-transient exception mid-run doesn't
+  discard the run: `.run_agent_loop_with_meta()` returns `(output_so_far, meta)`
+  with `stop_reason='error'`, `meta['error']` set, and usage accumulated so far.
+  The plain `.run_agent_loop()` — no meta channel to carry the error — still
+  raises, preserving its fail-loud contract.
 
 !!! note "Prompt caching is always on"
     There is no opt-in. The cacheable system+tools prefix is what makes it
