@@ -18,7 +18,7 @@ import json
 import time
 import uuid
 
-from teenyfactories.logging import log_debug, log_error, log_warn
+from teenyfactories.logging import log_debug, log_info, log_error, log_warn
 from . import base
 from . import caching
 
@@ -31,6 +31,54 @@ _HISTORY_LOW_WATERMARK = 40
 _TOOL_RESULT_CAP_CHARS = 12000
 _WIRE_TIMEOUT_S = 90.0  # over-wire tools may be LLM-backed (e.g. a broker RFI) — allow for a model round-trip under load
 _API_RETRIES = 3
+
+# Per-turn output cap applied when the caller sets no .max_tokens(). Guards against
+# ChatAnthropic's pathologically-low 1024 default silently truncating tool-call JSON
+# and narration every turn. 8192 is ample for an agentic turn (narration + tool-call
+# args, not a whole document) and bounds a runaway; override per call via .max_tokens().
+_DEFAULT_AGENT_MAX_TOKENS = 8192
+
+# Heuristic: the same tool called with the same args, failing this many times, means
+# the model is stuck. On the Nth identical failure we nudge it; one more identical
+# failure after the nudge terminates the loop (preserving the last text seen).
+_REPEAT_ERROR_LIMIT = 3
+
+# Cap any single logged payload (tool args/results, narration, full responses) so the
+# observability log lines can't dump the 100K+ reference docs factory agents pull into
+# tool args/results into factory_logs. INFO summaries use a much smaller cap inline.
+_LOG_FIELD_CAP = 2000
+
+
+def _trunc(val, cap: int = _LOG_FIELD_CAP) -> str:
+    """Stringify + cap a value for logging, with an explicit dropped-char marker."""
+    s = val if isinstance(val, str) else str(val)
+    return s if len(s) <= cap else s[:cap] + f"… [+{len(s) - cap} chars]"
+
+
+def _json_args(args) -> str:
+    """Best-effort JSON-encode tool-call arguments for logging (never raises)."""
+    try:
+        return json.dumps(args, default=str, ensure_ascii=False, sort_keys=True)
+    except Exception:
+        return str(args)
+
+
+def _narration_of(ai) -> str:
+    """Extract the model's text narration from an AIMessage whose content may be a
+    plain string OR a list of content blocks (Anthropic returns text + tool_use
+    blocks interleaved). Returns '' when there's no text."""
+    content = getattr(ai, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                parts.append(block.get("text") or "")
+            elif isinstance(block, str):
+                parts.append(block)
+        return "".join(parts)
+    return "" if content is None else str(content)
 
 
 # ── tool sourcing + conversion ────────────────────────────────────────────────
@@ -296,6 +344,17 @@ def _shutting_down() -> bool:
         return False
 
 
+def _clearance_gate():
+    """Spend-limit clearance — the orchestrator gates the call before the
+    provider request. Fails OPEN (same as call_llm / .ask())."""
+    try:
+        from teenyfactories.cost_clearance import check_and_pause
+
+        check_and_pause()
+    except Exception as clearance_err:
+        log_warn(f"💬 LLM clearance check unavailable (proceeding): {clearance_err}")
+
+
 # ── the loop ────────────────────────────────────────────────────────────────────
 
 
@@ -310,11 +369,17 @@ def run_agent_loop(builder, task, with_meta=False):
     used_model = base._get_model_name(builder._provider, model=builder._model)
     request_id = str(uuid.uuid4())
 
+    # #5 — apply a sane per-turn output cap when the caller set none, so providers
+    # with a low SDK default (ChatAnthropic = 1024) don't silently truncate every
+    # turn. Still fully overridable via .max_tokens(). Loop-local by design: single-
+    # shot .ask() is left byte-identical (see module note — its Anthropic 1024 default
+    # is a separate, flagged follow-up).
+    effective_max_tokens = builder._max_tokens if builder._max_tokens is not None else _DEFAULT_AGENT_MAX_TOKENS
     client = base.get_llm_client(
         builder._provider,
         model=builder._model,
         temperature=builder._temperature,
-        max_tokens=builder._max_tokens,
+        max_tokens=effective_max_tokens,
         extra_body=builder._extra_body or None,
     )
     if not hasattr(client, "bind_tools"):
@@ -331,6 +396,9 @@ def run_agent_loop(builder, task, with_meta=False):
 
     messages = ([system_msg] if system_msg else []) + [HumanMessage(content=task)]
 
+    log_info(f"🤖 agent loop start · {used_provider}/{used_model} · max_turns={builder._max_turns} · tools={len(specs)}")
+    log_debug(f"🤖 agent loop task: {_trunc(task)}")
+
     turns, tool_calls_all = [], []
     usage_agg = {
         "input_tokens": 0,
@@ -343,45 +411,129 @@ def run_agent_loop(builder, task, with_meta=False):
     finish_reason = None
     max_turns_reached = False
     output = ""
+    last_nonempty_text = ""   # #1 — most recent model narration, so max-turns/errors keep it
+    stop_reason = None        # completed | max_turns | length | repeat_error | error
+    run_error = None          # #8 — exception message when the loop aborts mid-run
+    repeat_errors = {}        # #2 — (tool, args_json) -> identical-failure count
+    nudged = set()            # #2 — offender keys we've already corrected once
     # One client, reused every turn — a caller's stable extra_body (e.g. OpenRouter
     # provider.order) rides every request unchanged, best-effort consistent routing
     # so the upstream prefix-cache bites. tf does not auto-pin (see caching.py).
 
-    for turn_idx in range(builder._max_turns):
-        # Rolling cache breakpoint on the tail (Anthropic) — invoke on a marked copy
-        # so the persistent `messages` list stays marker-free.
-        invoke_msgs = caching.mark_cache_tail(messages, used_provider)
-        t0 = time.time()
-        ai = _invoke_with_retry(bound, invoke_msgs)
-        turn_ms = int((time.time() - t0) * 1000)
+    try:
+        for turn_idx in range(builder._max_turns):
+            # Spend-limit clearance — pre-flight-gate every turn, exactly like .ask().
+            # Top-of-loop also covers turn 0, so an already-over-budget factory is
+            # stopped before the first provider request.
+            _clearance_gate()
+            # Rolling cache breakpoint on the tail (Anthropic) — invoke on a marked copy
+            # so the persistent `messages` list stays marker-free.
+            invoke_msgs = caching.mark_cache_tail(messages, used_provider)
+            t0 = time.time()
+            ai = _invoke_with_retry(bound, invoke_msgs)
+            turn_ms = int((time.time() - t0) * 1000)
 
-        raw = base._extract_token_info(ai).get("raw") or {}
-        _fold_usage(usage_agg, raw)
-        finish_reason = (raw.get("response_metadata") or {}).get("finish_reason")
-        _log_turn_usage(used_provider, used_model, raw, turn_ms, request_id)
+            raw = base._extract_token_info(ai).get("raw") or {}
+            _fold_usage(usage_agg, raw)
+            finish_reason = (raw.get("response_metadata") or {}).get("finish_reason")
+            _log_turn_usage(used_provider, used_model, raw, turn_ms, request_id)
 
-        tool_names = [tc.get("name") for tc in (ai.tool_calls or [])]
-        turn_info = {"turn": turn_idx, "tool_calls": tool_names, "usage": raw.get("usage_metadata")}
-        turns.append(turn_info)
-        if builder._on_turn:
-            try:
-                builder._on_turn(turn_info)
-            except Exception as e:
-                log_warn(f"💬 on_turn callback raised: {e}")
+            n_calls = len(ai.tool_calls or [])
+            log_info(
+                f"💬 iteration {turn_idx + 1}/{builder._max_turns} · {turn_ms}ms · "
+                f"finish={finish_reason} · tool_calls={n_calls}"
+            )
+            narration = _narration_of(ai)
+            if narration.strip():
+                last_nonempty_text = narration  # #1 — keep the latest text for fallback
+                log_debug(f"💭 narration (iteration {turn_idx + 1}): {_trunc(narration)}")
 
-        if not ai.tool_calls:
-            output = ai.content or ""
-            break
+            tool_names = [tc.get("name") for tc in (ai.tool_calls or [])]
+            turn_info = {"turn": turn_idx, "tool_calls": tool_names, "usage": raw.get("usage_metadata")}
+            turns.append(turn_info)
+            if builder._on_turn:
+                try:
+                    builder._on_turn(turn_info)
+                except Exception as e:
+                    log_warn(f"💬 on_turn callback raised: {e}")
 
-        messages.append(ai)
-        for tc in ai.tool_calls:  # SERIAL — no parallelism
-            result = _dispatch_tool(tc, dispatch, schemas, builder)
-            tool_calls_all.append({"name": tc.get("name"), "args": tc.get("args"), "result": result})
-            messages.append(ToolMessage(content=_cap_tool_result(result), tool_call_id=tc.get("id")))
-        messages = _trim_history(messages)
-    else:
-        max_turns_reached = True
-        log_debug(f"💬 run_agent_loop hit max_turns ({builder._max_turns})")
+            # #4 — the model's output was cut off at the token limit. Its tool-call JSON
+            # (if any) may be malformed, so we do NOT dispatch it; stop and preserve the
+            # partial text. Overridable headroom is _DEFAULT_AGENT_MAX_TOKENS / .max_tokens().
+            if finish_reason == "length":
+                output = narration or last_nonempty_text
+                stop_reason = "length"
+                log_warn(
+                    f"💬 agent loop stopping at iteration {turn_idx + 1}: model output truncated "
+                    f"(finish_reason=length) — raise .max_tokens() if this recurs"
+                )
+                break
+
+            if not ai.tool_calls:
+                output = ai.content or ""
+                stop_reason = "completed"
+                log_info(f"🤖 agent loop final response · {len(narration)} chars · {_trunc(narration, 240)}")
+                log_debug(f"🤖 agent loop final response (full): {_trunc(narration)}")
+                break
+
+            messages.append(ai)
+            turn_error_keys = []
+            for tc in ai.tool_calls:  # SERIAL — no parallelism
+                log_info(f"🔧 tool call: {tc.get('name')}")
+                args_json = _json_args(tc.get("args"))
+                log_debug(f"🔧 args → {tc.get('name')}: {_trunc(args_json)}")
+                result = _dispatch_tool(tc, dispatch, schemas, builder)
+                log_debug(f"🔧 result ← {tc.get('name')}: {_trunc(_cap_tool_result(result))}")
+                if isinstance(result, dict) and "error" in result:
+                    ekey = (tc.get("name"), args_json)  # #2 — stable identity for repeat detection
+                    repeat_errors[ekey] = repeat_errors.get(ekey, 0) + 1
+                    turn_error_keys.append(ekey)
+                tool_calls_all.append({"name": tc.get("name"), "args": tc.get("args"), "result": result})
+                messages.append(ToolMessage(content=_cap_tool_result(result), tool_call_id=tc.get("id")))
+
+            # #2 — repeat-error guardrail: only judge tools that errored THIS turn, so a
+            # model that has moved on isn't punished for an old offender. Nudge once at the
+            # threshold; terminate if the same call fails identically again after the nudge.
+            stuck = next((k for k in turn_error_keys if repeat_errors[k] >= _REPEAT_ERROR_LIMIT), None)
+            if stuck is not None:
+                if stuck in nudged:
+                    output = last_nonempty_text
+                    stop_reason = "repeat_error"
+                    log_warn(
+                        f"💬 agent loop terminating: tool '{stuck[0]}' failed identically "
+                        f"{repeat_errors[stuck]}× despite a corrective nudge"
+                    )
+                    break
+                nudged.add(stuck)
+                nudge = (
+                    f"The tool '{stuck[0]}' has now failed {repeat_errors[stuck]} times with identical "
+                    f"arguments. Do not call it again the same way — change the arguments, try a different "
+                    f"approach, or finish with the information you already have."
+                )
+                messages.append(HumanMessage(content=nudge))
+                log_warn(f"💬 agent loop nudging model: '{stuck[0]}' failed {repeat_errors[stuck]}× identically")
+
+            messages = _trim_history(messages)
+        else:
+            max_turns_reached = True
+            stop_reason = "max_turns"
+            output = output or last_nonempty_text  # #1 — don't discard the model's last text
+            log_debug(f"💬 run_agent_loop hit max_turns ({builder._max_turns})")
+    except Exception as loop_err:  # #8 — surface partial progress instead of losing it
+        run_error = str(loop_err)
+        stop_reason = "error"
+        output = output or last_nonempty_text
+        log_error(f"💬 agent loop aborted after {len(turns)} iteration(s): {loop_err}")
+        # Only the with_meta path can carry the error to the caller (meta['error']);
+        # the plain path has no such channel, so re-raise there rather than return a
+        # silent partial — preserves the pre-existing fail-loud contract.
+        if not with_meta:
+            raise
+
+    log_info(
+        f"🤖 agent loop done · iterations={len(turns)} · tool_calls={len(tool_calls_all)} · "
+        f"finish={finish_reason} · stop_reason={stop_reason}"
+    )
 
     meta = base._meta_from_raw({}, used_provider, used_model, None)
     meta.update(
@@ -391,6 +543,8 @@ def run_agent_loop(builder, task, with_meta=False):
             "tool_calls": tool_calls_all,
             "finish_reason": finish_reason,
             "max_turns_reached": max_turns_reached,
+            "stop_reason": stop_reason,  # completed | max_turns | length | repeat_error | error
+            "error": run_error,          # exception message when stop_reason == 'error', else None
             "cost": usage_agg.get("cost"),
         }
     )
