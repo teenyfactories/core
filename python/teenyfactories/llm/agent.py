@@ -296,6 +296,17 @@ def _shutting_down() -> bool:
         return False
 
 
+def _clearance_gate():
+    """Spend-limit clearance — the orchestrator gates the call before the
+    provider request. Fails OPEN (same as call_llm / .ask())."""
+    try:
+        from teenyfactories.cost_clearance import check_and_pause
+
+        check_and_pause()
+    except Exception as clearance_err:
+        log_warn(f"💬 LLM clearance check unavailable (proceeding): {clearance_err}")
+
+
 # ── the loop ────────────────────────────────────────────────────────────────────
 
 
@@ -348,6 +359,10 @@ def run_agent_loop(builder, task, with_meta=False):
     # so the upstream prefix-cache bites. tf does not auto-pin (see caching.py).
 
     for turn_idx in range(builder._max_turns):
+        # Spend-limit clearance — pre-flight-gate every turn, exactly like .ask().
+        # Top-of-loop also covers turn 0, so an already-over-budget factory is
+        # stopped before the first provider request.
+        _clearance_gate()
         # Rolling cache breakpoint on the tail (Anthropic) — invoke on a marked copy
         # so the persistent `messages` list stays marker-free.
         invoke_msgs = caching.mark_cache_tail(messages, used_provider)
