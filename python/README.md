@@ -25,7 +25,7 @@ Writing a row into a `(collection, state)` makes every subscriber to that pair p
 | Group | Names |
 |---|---|
 | Pub/sub | `on_state`, `run_pending` (the only pub/sub primitive — no message bus) |
-| Data | `collection` (`.set`, `.add`, `.get`, `.get_all`, `.remove`, `.count`, `.exists`, `.first`, `.state`, `.where`, `.vector_search`), `embed` |
+| Data | `collection` (`.set`, `.add`, `.get`, `.get_all`, `.remove`, `.count`, `.exists`, `.first`, `.state`, `.where`, `.limit`, `.vector_search`), `embed` |
 | LLM | `llm` (fluent builder — `.ask` / `.run_agent_loop`), `call_llm` (LEGACY) |
 | MCP | `add_mcp_server`, `add_mcp_tool` |
 | Schedule | `on_schedule.every(N).<unit>.do(handler)` |
