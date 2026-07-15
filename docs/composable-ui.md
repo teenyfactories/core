@@ -256,8 +256,6 @@ and read fields via `config:`.
 | `treemap` | Hierarchical treemap. |
 | `scatter` | 2D X/Y scatter with optional quadrants and click-to-open. |
 | `force_directed` | Force-graph for state machines / agent diagrams. |
-| `code_editor` | Monaco editor bound to a code/text field. |
-| `tree_editor` | Edit a flat collection as a tree (parent-pointer rows). |
 | `file_explorer` | Browse / upload / delete files in a factory **volume**. |
 
 ### Forms & inputs
@@ -270,6 +268,8 @@ and read fields via `config:`.
 | `multi_select` | Multi-choice combo bound to an array field. |
 | `button` | A button that dispatches an action. |
 | `button_group` | A laid-out set of buttons. |
+| `code_editor` | Monaco editor bound to a code/text field. |
+| `tree_editor` | Edit a flat collection as a tree (parent-pointer rows). |
 
 ### Chat & status
 
