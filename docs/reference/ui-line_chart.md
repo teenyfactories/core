@@ -7,7 +7,7 @@ Render time-series data as line, area, or multi-series charts via Recharts. Supp
 ## When to use / when NOT
 
 **Use:** historical trends, metrics over time, multi-line comparisons (daily spend by category, event counts over days).  
-**Not:** single-value metrics (use `gauge` / `metric`), hierarchical data (use `treemap`).
+**Not:** single-value metrics (use `metrics`), hierarchical data (use `treemap`).
 
 ## YAML shape
 

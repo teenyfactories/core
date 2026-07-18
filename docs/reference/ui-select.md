@@ -16,10 +16,10 @@ config:
   field: status                  # Dot-path to bind; reads/writes via shared DataRef
   label: Status                  # Display label
   placeholder: Choose status     # Hint text when empty (optional)
-  options:                       # Static option list (required)
+  options:                       # Static option list (required) — no dynamic sourcing
     - { value: active,   label: Active }
     - { value: inactive, label: Inactive }
-  read_only: false               # Disable editing (optional, default false)
+  disabled: false                # Grey out / block editing (optional, default false)
   required: false                # Mark as mandatory (optional, default false)
 ```
 
@@ -30,8 +30,8 @@ config:
 | `field` | string | Dot-path to the scalar field to bind (e.g. `status`, `data.tier`) |
 | `label` | string | Display label for the dropdown |
 | `placeholder` | string | Hint text when value is empty (optional) |
-| `options` | array | List of `{ value, label }` pairs. Only static options supported |
-| `read_only` | boolean | When `true`, field is display-only (default `false`) |
+| `options` | array | List of `{ value, label }` pairs. Only static options supported — no `options_from` |
+| `disabled` | boolean | When `true`, the dropdown is greyed out and non-editable (default `false`) |
 | `required` | boolean | When `true`, empty state is invalid (default `false`) |
 
 ## Data & events
@@ -74,6 +74,7 @@ on_change:
 
 ## Gotchas
 
-- **Static options only:** Unlike `multi_select`, `select` does not support `options_from` (dynamic sourcing from factory config states/agents). Author all options in `options:`.
+- **Static options only (vs `multi_select`):** `select` does NOT support `options_from` — author every option in `options:`. `multi_select` is the asymmetric one: it adds dynamic sourcing via `options_from: states | agents | volumes` (+ `exclude_self_field`). Reach for `multi_select` when the option list must track factory config.
+- **`disabled`, not `read_only`:** `select` (and `multi_select`) honour `disabled` to block editing — they have no `read_only` display-only mode. The `read_only` key (a formatted, chrome-free display) exists on `text_input` / `textarea` / `code_editor`, not on the dropdowns; writing `read_only:` on a `select` is silently ignored.
 - **Bare dispatcher:** `on_change` on `select` is a bare dispatcher — it does NOT carry a full row snapshot. Use `data_field` to slice a specific field, or use an explicit `data: { ... }` map to patch multiple fields.
 - **Required validation:** The `required:false` default allows empty selections; toggling to `true` adds client-side validation but does not block invalid payloads server-side.

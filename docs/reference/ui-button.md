@@ -6,7 +6,7 @@ A clickable button that triggers actions (state transitions, data mutations, pag
 
 ## When to use / when NOT
 
-**Use** for user-driven state transitions, data mutations, or navigation. **Not** a link — use `markdown` with `[text](url)` or `link_table` column for navigation. Not a toggle — use `select` or `checkbox` for stateful form inputs that persist on blur.
+**Use** for user-driven state transitions, data mutations, or navigation. **Not** a link — use `markdown` with `[text](url)` or a `table` column with `link_field` for navigation. Not a toggle — use `select` (scalar) or `multi_select` (array) for stateful form inputs that persist on change.
 
 ## YAML shape
 

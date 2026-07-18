@@ -498,9 +498,9 @@ default_ui:
     component: tabs
     children:
       - { component: tab, slot: tab, title: Rubric }
-      - component: grid
+      - component: layout_column
         slot: panel
-        config: { direction: vertical, gap: 12px }
+        config: { gap: 12px }
         children:
           - component: code_editor
             config: { field: rubric, language: yaml, serialize: yaml }   # bound to preloaded factory_data.rubric.default
@@ -525,27 +525,27 @@ default_ui:
     children:
       # --- Tab 1: Overview ---
       - { component: tab, slot: tab, title: Overview, config: { icon: chart-pie } }
-      - component: grid
+      - component: layout_row
         slot: panel
-        config: { direction: horizontal, gap: 16px }
+        config: { gap: 16px }
         children:
-          - component: grid
-            style: { flex: 2 }
-            config: { direction: vertical, gap: 16px }
+          - component: layout_column
+            config: { flex: 2, gap: 16px }         # per-child flex is config, not style
             children:
               - component: metrics
                 data: { collection: stats, state: summary, latest: true }
                 config: { metrics: [ { field: total, label: Total, format: number } ] }
               - component: card
                 title: Chart
-                style: { flex: 1 }
+                config: { flex: 1 }                # fills the remaining column height
                 children:
                   - component: line_chart
                     data: { collection: stats, state: summary, latest: true }
                     config: { data_field: daily, x_field: day, y_field: count }
           - component: card
             title: Assistant
-            style: { flex: 1, maxWidth: 360px }
+            config: { flex: 1 }
+            style: { maxWidth: 360px }              # maxWidth is a real CSS constraint — stays in style
             children: [ { component: chat_panel } ]
 
       # --- Tab 2: Data ---

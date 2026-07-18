@@ -16,7 +16,7 @@ children:
     slot: tab
     title: Overview
     config: { icon: chart-pie }
-  - component: grid
+  - component: layout_column
     slot: panel
     children: [...]
   - component: tab
@@ -34,7 +34,7 @@ children:
 - `id: <string>` — optional; required if multiple Tabs on same page (URL param collision prevention).
 
 ## Data & events
-No data binding. `title` on `tab` markers is required and becomes the tablist label. Panel containers hold any registered component (`grid`, `card`, `markdown`, etc.). Child `config.icon` is optional.
+No data binding. `title` on `tab` markers is required and becomes the tablist label. Panel containers hold any registered component (`layout_column`, `card`, `markdown`, etc.). Child `config.icon` is optional.
 
 ## Example
 ```yaml
@@ -55,7 +55,7 @@ children:
   - component: tab
     slot: tab
     title: Details
-  - component: grid
+  - component: layout_column
     slot: panel
     children: [...]
 ```

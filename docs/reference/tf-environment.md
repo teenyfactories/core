@@ -18,7 +18,7 @@ Resolution rules (locked):
 | `503` (feature off — no master key) | falls through to env; latches for the rest of the process so subsequent calls skip the round-trip |
 | `5xx` / network / 2s timeout | `log_warn` once per (key, reason); falls through to env |
 
-Never raises. Agents stay running even if orchestrator is briefly unreachable.
+Never raises. Agents stay running even if orchestrator is briefly unreachable. This **fail-open** posture (shared by the config cascade below) is the deliberate opposite of `tf.bucket_store` (see tf-volumes), whose file ops **fail loud** — they raise rather than silently falling back, because acting on the wrong file is worse than a visible error.
 
 There is no `tf.secrets.set` / `.rotate` / `.list`. Writes happen via the admin UI (Admin → Secrets card, or per-factory popup on the factory edit page). Agents are read-only.
 

@@ -193,7 +193,7 @@ tf.collection('chunks').set(
 )
 ```
 
-Supported embedding dims: 256, 512, 768, 1024, 1536, 3072.
+The vector's dimension must match one of the fixed `factory_vectors` sizes or the write fails — see **tf-llm § Embeddings** (Dimension constraint) for the list and supported models.
 
 The `user_id` column defaults to `'system'` for agent writes. Backend API writes stamp the session's user id (fallback `'-1'` until auth is wired).
 

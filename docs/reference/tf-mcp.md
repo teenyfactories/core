@@ -65,14 +65,14 @@ Each tool has its own collection `_mcp_{tool_name}`. A call is a single row whos
 | 3 | agent | Executes handler; UPDATEs the same row to `state='response'` with `data.result` or `data.error`. |
 | 4 | orchestrator backend | Polls the row by key until state = 'response'; returns `data.result` to the LLM. |
 
-The tool inbox is an ordinary `(collection, state)` pipeline: collection `_mcp_{tool_name}`, the agent subscribes via `tf.on_state('_mcp_{tool_name}', 'request')`, and consumes each call by transitioning the row to `state='response'`. No special channel — same poll-based dispatch as every other subscription.
+The tool inbox is an ordinary `(collection, state)` pipeline: collection `_mcp_{tool_name}`, the agent subscribes via `tf.on_state('_mcp_{tool_name}', 'request')`, and consumes each call by transitioning the row to `state='response'`. No special channel — same poll-based dispatch as every other subscription, and the same failure contract: a request row the handler never transitions to `response` is retried and eventually parked under the 5-strike-park rule (see tf-common).
 
 **Audit trail:** every tool call is one row you can inspect:
 ```sql
 SELECT key, state, value, created_at, updated_at
   FROM factory_data
- WHERE factory_name='enterprise_agreement'
-   AND collection='_mcp_search_agreement'
+ WHERE factory_name='my_factory'
+   AND collection='_mcp_search_docs'
  ORDER BY updated_at DESC LIMIT 5;
 ```
 (The DB column is still `value`; the Python surface exposes it as `data`.)

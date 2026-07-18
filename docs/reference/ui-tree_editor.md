@@ -5,7 +5,7 @@ Hierarchical tree editor for flat collections. Displays parent-child relationshi
 
 ## When to use / when NOT
 **Use:** Folder structures, org charts, hierarchies, nested workflows.
-**NOT:** Deep nesting (→ `max_depth` cap), pre-built nested JSON (use tree_view for read-only), frequent bulk tree mutations.
+**NOT:** Deep nesting (→ `max_depth` cap), read-only display of nested JSON (use `markdown` or `detail_list`), frequent bulk tree mutations.
 
 ## YAML shape
 ```yaml
