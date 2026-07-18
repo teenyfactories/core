@@ -59,7 +59,7 @@ def escalate_if_still_submitted(item):
 
 **Contract — the pipeline-FIFO + handler-must-transition + 5-strike-park rule:**
 
-Subscribing to `(collection, state)` means *"process every row currently in that state, oldest first (FIFO, ordered `state_changed_at ASC, key ASC`)."* The state itself is the queue — there is no cursor. A row is "consumed" only when the handler **moves it out of the state**: transition via `tf.collection(...).set(key, state='next', data=...)` or delete via `.remove(key)`.
+Subscribing to `(collection, state)` means *"process every row currently in that state, oldest first (FIFO, ordered `state_changed_at ASC, key ASC`)."* The state itself is the queue — there is no cursor. **Your handler MUST move the trigger row out of its input state on success** — transition via `tf.collection(...).set(key, state='next', data=...)` or delete via `.remove(key)`. A row left in its input state (handler returned without transitioning, or an aggregator that only reads and writes elsewhere) is NOT consumed: it re-fires every poll and parks after 5 attempts. If a handler's job is to aggregate/read many rows rather than advance one, it belongs on a schedule (`tf.on_schedule`), not an `on_state` subscription.
 
 A row that stays in the state — whether the handler **raised** OR **returned cleanly without transitioning** (both are counted identically) — is re-dispatched on the next poll. After **5 such non-departures** the row is **parked**: skipped silently until the process restarts, with one `[ERROR]` log:
 
@@ -124,6 +124,7 @@ Every `on_state` handler receives the same row dict:
     'user_id':      'system',
     'data':         {...},          # JSONB payload (the surface key is `data`)
     'state':        'loaded',
+    'state_changed_at': datetime(...),
     'created_at':   datetime(...),
     'updated_at':   datetime(...),
 }

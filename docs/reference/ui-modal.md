@@ -12,6 +12,26 @@ A surface that opens and closes over the main page, commonly for editing detail 
 
 ## YAML shape
 
+Two forms supported. **Named-key form (current default):**
+
+```yaml
+component: modal
+title: Detail Title
+config:
+  width: 720px
+  max_height: 80vh
+  show_close_button: true
+  close_on_escape: true
+body:
+  - component: tabs
+    children: [...]
+footer:
+  - component: button_group
+    children: [...]
+```
+
+**Legacy slot form (back-compat):**
+
 ```yaml
 component: modal
 title: Detail Title
@@ -29,7 +49,7 @@ children:
     children: [...]
 ```
 
-Slot-aware: children may carry `slot: header|body|footer` (default `body`).
+Slot-aware: children may carry `slot: header|body|footer` (default `body`; legacy form only). Named-key form (`body:`, `footer:`) is preferred.
 
 ## Config keys
 
@@ -37,8 +57,11 @@ Slot-aware: children may carry `slot: header|body|footer` (default `body`).
 |---|---|---|---|
 | `width` | CSS length | — | e.g. `720px`, `100%`. |
 | `max_height` | CSS length | — | e.g. `80vh`. |
+| `min_height` | CSS length | — | e.g. `400px`. |
+| `height` | CSS length | `auto` | e.g. `auto`, `80vh`. |
 | `show_close_button` | bool | `true` | X button in header. |
 | `close_on_escape` | bool | `true` | Press Escape to close. |
+| `close_on_backdrop` | bool | `true` | Click outside modal to close. |
 
 ## Data & events
 
@@ -59,12 +82,11 @@ config:
   width: 720px
   max_height: 80vh
   show_close_button: true
-children:
-  - slot: body
-    component: tabs
+body:
+  - component: tabs
     children: [...]
-  - slot: footer
-    component: button_group
+footer:
+  - component: button_group
     children:
       - component: button
         config: { label: Cancel, variant: secondary }

@@ -53,8 +53,10 @@ config:
 | `columns[].value: "$: <expr>"` | JSONata over `{ row }`, replaces `field:` for display; `field:` still needed for sort/name. Builtins incl. `$uppercase`, `$string`, `&`, ternary. |
 | `columns[].type: tags` | Cell → pill chip(s) — array → chip/item, scalar → single chip. |
 | `columns[].tagColor: primary` | Only with `type: tags`; solid fill, white text. Omit for neutral; reserve for status pills. |
-| `row_actions[]` | Flat sibling params (`action:`, `collection:`, `key:`, `state:`/`id:`), canonical action enum — no `args:`/`actions:` wrapper. |
+| `sentiment_field` | String, default `'sentiment'`. Data key for tracking active row-action index (internal). |
+| `row_actions[]` | Flat sibling params (`action:`, `collection:`, `key:`, `state:`/`id:`, `icon:`, `label:`), canonical action enum — no `args:`/`actions:` wrapper. |
 | `on_row_click.open` | Id-ref (string/`$:` JSONata → string) to sibling `modal` — recommended shape. |
+| `on_row_click.action` | Dispatch a canonical action on row click (e.g. `save_data_item`, `delete_data_item`). |
 | `on_row_click.detail_modal` | Legacy inline shape (below), still supported. |
 
 ## Data & events
@@ -63,7 +65,7 @@ config:
 - **Row click** publishes `{ row: <clonedRow> }` onto DataRef so descendants resolve `$:row.field`. `on_row_click.open` / `row_actions[*].action: open` take a string id only (id-ref pattern; `ui-common`).
 - **`detail_modal` (legacy).** Portal-mounted, scoped to the clicked row; body + footer share one hoisted DataRefProvider — footer Save auto-sees body edits, no `data:`/`data_field:` needed (`key: '$: _key'`; `_key`/`_state`/`_updated_at` are Table-injected). Sibling id-ref is newer/recommended; `detail_modal:` predates it, still supported. **Known debt:** footer Save's snapshot leaks those underscore keys into saved `data` JSONB (display unaffected, re-flattened next read) — filed against composable-ui-architect debt register.
 - **`sections:`** >1 entry → tab strip (`title` = label, footer visible across tabs); 1 entry → inline. Sizing `config: { width, max_width, max_height, min_height }` (defaults `800px`/`90vw`/`85vh`/unset) — set `min_height` if tab heights vary, else the modal collapses/jumps.
-- **Field asymmetry**: `markdown`/`table` read `field` at section top level; everything else reads it from `config:`. `table.field` needs array of **objects**; array of **strings** needs `tag_list`.
+- **Field asymmetry**: `markdown`/`table` read `field` at section top level; everything else reads it from `config:`. `table.field` needs array of **objects**; array of **strings** needs `tag_list`. Detail modal table sections also accept `columns: [{field, label}]` to control column headers.
 - `delete_data_item` + `then_close: true` = canonical row-remove; no built-in confirm step for `detail_modal` footer actions (`confirm_destructive_modal` not wireable there).
 
 ## Examples

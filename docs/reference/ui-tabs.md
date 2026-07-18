@@ -34,7 +34,7 @@ children:
 - `id: <string>` — optional; required if multiple Tabs on same page (URL param collision prevention).
 
 ## Data & events
-No data binding. `title` on `tab` markers is required and becomes the tablist label. Panel containers hold any registered component (`layout_column`, `card`, `markdown`, etc.). Child `config.icon` is optional.
+No data binding. `title` on `tab` markers is required and becomes the tablist label. Panel containers hold any registered component (`layout_column`, `card`, `markdown`, etc.). Child `config.icon` is ignored (removed by product decision; retained for back-compat).
 
 ## Example
 ```yaml

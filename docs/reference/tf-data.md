@@ -278,9 +278,9 @@ Behaviour:
 - Non-parseable `since` value → `400 {"error": "bad_request", "detail": "since must be ISO-8601 (e.g. 2026-05-03T12:34:56Z)"}`. Validation is `const t = new Date(since); if (isNaN(t.getTime())) reject`.
 - Future-dated `since` is allowed (returns empty `rows: []`); server does not clamp.
 
-**Tombstones / deletes — known gap (v1)**
+**Tombstones / deletes — current constraint**
 
-Rows deleted between disconnect and reconnect do not appear in `?since=` results — the caller has no way to know to evict them. v1 accepts this gap. Mitigation: `tf_data_changed` carries `op: 'delete'` for live deletes, so an open SSE connection sees them; on reconnect, the next NOTIFY on the collection (any cause) prompts `useBoundData` to refetch, which catches deletions that happened during the gap. A full deletion-replay (e.g. a soft-delete tombstone column queried by `?since=`) is still deferred — the live channel covers the common case.
+Rows deleted between disconnect and reconnect do not appear in `?since=` results — the caller has no way to know to evict them. Mitigation: `tf_data_changed` carries `op: 'delete'` for live deletes, so an open SSE connection sees them; on reconnect, the next NOTIFY on the collection (any cause) prompts `useBoundData` to refetch, which catches deletions that happened during the gap. A full deletion-replay (e.g. a soft-delete tombstone column queried by `?since=`) is deferred — the live channel covers the common case.
 
 **Backwards compat**
 

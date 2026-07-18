@@ -27,6 +27,12 @@ config:
 | `label` | string | — | User-visible field label. |
 | `rows` | number | 3 | Initial visible row height. |
 | `read_only` | boolean | false | Disable editing; display mode only. |
+| `placeholder` | string | — | Greyed hint text shown when field is empty. |
+| `hint` | string | — | Optional help text shown via `?` info icon beside the label. |
+| `disabled` | boolean | false | When `true`, the textarea is greyed out and non-editable. |
+| `required` | boolean | false | When `true`, empty field blocks form submission and shows validation error. |
+| `format` | string | — | Display format for read-only mode (e.g., `"relative_time"`). |
+| `resize` | enum | — | Resize behavior: `vertical`, `horizontal`, `both`, or `none`. |
 
 ## Data & events
 

@@ -40,6 +40,9 @@ Shared, presentational modal for confirming destructive actions. Issues no HTTP 
 | `cancel_label` | string | No; default "Cancel" | Safe choice button text |
 | `confirm_action` | object | Yes (or via subject) | Action dispatched on confirm (e.g., `{action: custom:git_force_push}`) |
 | `keep_open_on_confirm` | boolean | No; default false | If true, host must close modal manually |
+| `width` | CSS length | `480px` | Modal width |
+| `max_width` | CSS length | `90vw` | Responsive max-width constraint |
+| `max_height` | CSS length | `80vh` | Responsive max-height constraint |
 
 ## Data & events
 

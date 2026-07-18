@@ -37,6 +37,7 @@ config:
 | `exclude_self_field` | string | No | Field path; option matching that value is hidden |
 | `disabled` | boolean | No | When `true`, the control is greyed out and non-editable (default `false`) |
 | `required` | boolean | No | When `true`, mark as mandatory (default `false`) |
+| `hint` | string | No | Optional help text shown via `?` info icon beside the label. |
 
 ## Data & events
 

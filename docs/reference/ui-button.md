@@ -29,9 +29,12 @@ on_click:
 | Key | Type | Default | Notes |
 |---|---|---|---|
 | `label` | string | required | Button text; rendered centered. |
-| `variant` | enum | `secondary` | Visual style: `primary` (blue, CTA), `secondary` (neutral), `danger` (red/destructive), `ghost` (text-only, minimal chrome). |
+| `variant` | enum | `secondary` | Visual style: `primary` (blue, CTA), `secondary` (neutral), `danger` (red/destructive), `danger-outline` (red outline), `ghost` (text-only, minimal chrome). |
 | `size` | enum | `medium` | Button dimensions: `small`, `medium`, `large`. |
-| `icon` | string | — | Optional Font Awesome v6 solid icon name (e.g. `check`, `trash`, `plus`). Rendered left of label. |
+| `icon` | string | — | Optional Font Awesome v6 solid icon name (e.g. `check`, `trash`, `plus`). |
+| `icon_position` | enum | `left` | Icon placement: `left` or `right` of label. |
+| `disabled` | bool | `false` | When `true`, button is greyed out and non-clickable. |
+| `loading` | bool | `false` | When `true`, button shows a loading spinner and is non-clickable. |
 
 ## Data & events
 

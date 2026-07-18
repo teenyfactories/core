@@ -142,7 +142,7 @@ instead of crashing a container.
 
 ## Agents
 
-`agents:` is a map keyed by **slug** (`lowercase_with_underscores`). The slug IS the
+`agents:` is a map keyed by **slug** (lowercase letters, digits, underscores, hyphens). The slug IS the
 script filename: `agents/{slug}.py`. There is no `script:` override — the Python
 file is the agent.
 
@@ -208,7 +208,7 @@ volumes:
   - { name: cache, target: /var/cache }       # custom mount point (docker)
 ```
 
-Fields (object form): `name` (required; lowercase alphanumeric / `_` / `-`, ≤64
+Fields (object form): `name` (required; lowercase alphanumeric first character, followed by lowercase alphanumeric / `_` / `-`, ≤64
 chars); `source` / `target` / `readonly` are optional **docker-only** overrides (the
 k8s backend mounts nothing — see below). Unknown keys are preserved
 (forward-compatible passthrough), so future per-volume attributes are additive.

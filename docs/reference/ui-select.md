@@ -33,6 +33,7 @@ config:
 | `options` | array | List of `{ value, label }` pairs. Only static options supported — no `options_from` |
 | `disabled` | boolean | When `true`, the dropdown is greyed out and non-editable (default `false`) |
 | `required` | boolean | When `true`, empty state is invalid (default `false`) |
+| `hint` | string | Optional help text shown via `?` info icon beside the label. |
 
 ## Data & events
 

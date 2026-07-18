@@ -27,11 +27,16 @@ Multiline code editor (Monaco) with syntax highlighting, git diff markers, and s
 | Key | Type | Default | Meaning |
 |---|---|---|---|
 | `field` | string | required | DataRef path to the code string. |
+| `label` | string | — | Display label above the editor. |
 | `language` | enum | `python` | Syntax highlighting: `python`, `yaml`, `json`, `markdown`. |
 | `serialize` | enum | `yaml` | Format for storage: `yaml`, `json`, or `null` (raw string). |
 | `minimap` | bool | `false` | Show Monaco minimap column. |
 | `read_only` | bool | `false` | Disable editing; display-only. |
 | `font_size` | int | `13` | Editor font size (px). |
+| `theme` | enum | — | Editor theme: `vs-dark` or `light`. |
+| `line_numbers` | bool | `true` | Show line numbers in the gutter. |
+| `word_wrap` | bool | `true` | Enable word wrapping for long lines. |
+| `hint` | string | — | Optional help text shown via `?` info icon beside the label. |
 | `diff_source` | object | absent | Enable inline diff decorations (see below). |
 
 ## Data & events

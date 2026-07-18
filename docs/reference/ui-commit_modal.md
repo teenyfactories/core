@@ -26,6 +26,8 @@ Use: Commit flow in a factory context. NOT slot-aware — body and footer are fi
 | Key | Type | Default | Notes |
 |-----|------|---------|-------|
 | `width` | string | — | CSS width; e.g. `560px` |
+| `max_width` | string | `90vw` | CSS max-width; responsive constraint |
+| `max_height` | string | `80vh` | CSS max-height; responsive constraint |
 | `confirm_label` | string | — | Button label for commit action |
 | `cancel_label` | string | — | Button label for cancel |
 | `message_placeholder` | string | — | Textarea placeholder text |

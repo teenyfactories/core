@@ -26,11 +26,13 @@ config:
 
 ## Config keys
 
+**Data:** `data_field` (string, default — extracts array field from latest state row if data is an object).
+
 **Axes:** `x_field`, `y_field` (required); `x_label`, `y_label`; `x_domain`, `y_domain` (`[num|auto, ...]`, default auto); `x_reverse`, `y_reverse` (bool).
 
-**Dots & labels:** `label_field`, `show_labels`, `label_font_size` (10), `radius` (9).
+**Dots & labels:** `label_field`, `show_labels`, `label_font_size` (10), `radius` (8).
 
-**Colour:** `color_field` (categorical); `scale: { scheme: theme_categorical }`; `color_map` (per-category hex overrides); `default_color` (#a1a1aa fallback).
+**Colour:** `color_field` (categorical); `scale: { scheme: theme_categorical }`; `color_map` (per-category hex overrides); `default_color` ('var(--primary-500)' fallback).
 
 **Quadrants:** `show_quadrants` (bool); `quadrant_labels` (object with keys `top_right`, `top_left`, `bottom_right`, `bottom_left`).
 

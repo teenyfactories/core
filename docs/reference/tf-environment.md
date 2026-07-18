@@ -51,3 +51,4 @@ Available env vars in containers (any of these registered in the UI env-var tabl
 - `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `DIGITALOCEAN_API_KEY`, `OPENROUTER_API_KEY` — API keys
 - `DIGITALOCEAN_INFERENCE_URL` — override DO Gradient AI base URL (default `https://inference.do-ai.run/v1`)
 - `OPENROUTER_INFERENCE_URL` — override OpenRouter base URL (default `https://openrouter.ai/api/v1`)
+- `OLLAMA_BASE_URL` — Ollama server base URL (default `http://localhost:11434`)

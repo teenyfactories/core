@@ -30,15 +30,15 @@ config:
   field: status
   show_dot: true
   show_label: true
-  show_last_action: false
-  last_action_field: lastAction
+  show_pending_transition: false
+  pending_transition_field: pendingTransition
   color_map:
     custom_running: '#10b981'
 ```
 
 **Vocab (locked 2026-06-02):** pending/pulling/starting (info), running (success), stopping (warning), stopped/unknown (muted), crashed/oom_killed/crash_loop (error). Plus generic synonyms (active/online/failed/warning). Factory-owned `color_map` overrides individual statuses; use theme tokens (`var(--success-500)`) for brand chrome.
 
-**Example:** `show_last_action: true` renders sticky `(start requested)` / `(stop requested)` / `(restart requested)` suffix.
+**Example:** `show_pending_transition: true` renders sticky `(start requested)` / `(stop requested)` / `(restart requested)` suffix.
 
 ## tag_list
 
@@ -71,13 +71,15 @@ data:
   state: container_status
   latest: true
 config:
-  service_field: service
+  field: containers
+  show_controls: true
+  show_summary: true
   mode: default
 ```
 
 **Vocab:** Auto-buckets into healthy (running), transient (pending/pulling/starting/stopping), problem (crashed/oom_killed/crash_loop), terminal (stopped/unknown). Emits `custom:start_factory` / `custom:stop_factory` / `custom:restart_factory`.
 
-**Example:** `mode: compact` tightens row height; buttons stay visible (disabled when nothing running).
+**Example:** `mode: compact` tightens row height; buttons stay visible (disabled when nothing running). `show_controls: false` hides Start/Stop/Restart buttons; `show_summary: false` hides the summary line.
 
 ## Status leaves
 

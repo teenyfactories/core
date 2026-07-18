@@ -34,6 +34,7 @@ config:
 | `required` | bool | If true, empty field blocks form submission and shows validation error. |
 | `read_only` | bool | If true, field is display-only; `format:` enum applies (see Data & events). |
 | `hint` | string | Optional help text shown via `?` info icon beside the label. |
+| `format` | string | Display format for read-only mode (e.g., `"relative_time"` for timestamps). |
 
 ## Data & events
 

@@ -18,6 +18,7 @@ data:
   collection: ring_graph
   state: ready
   latest: true
+filter: "$: nodes[type='claimant']"
 config:
   show_arrows: false
   node_types:
@@ -45,7 +46,7 @@ Click handlers activate modals by string `id` only; modal descendants read `node
 
 **Edge geometry:** `arrow_offset_start` (default `0`; source inset), `arrow_offset_end` (default `0`; target inset). `passthrough: true` ignores insets.
 
-**Other:** `filter`, `empty_message`, `show_arrows`.
+**Other:** `empty_message`, `show_arrows`.
 
 ## Gotchas
 

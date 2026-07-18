@@ -44,7 +44,9 @@ answer = (
 
 ### Structured output
 
-`.with_structured_output(Model)` returns parsed Pydantic instance. Prefers **native provider enforcement** (LangChain `with_structured_output`), falls back to legacy `PydanticOutputParser` (inject format → invoke → parse) when provider/model doesn't enforce.
+`.with_structured_output(Model)` returns parsed Pydantic instance. Prefers **native provider enforcement** (LangChain `with_structured_output`), falls back to a `PydanticOutputParser` when the provider/model doesn't enforce.
+
+**Do NOT put a `{format_instructions}` placeholder in your prompt.** The framework handles format injection itself — on the fallback path it appends and fills format instructions automatically. Adding the placeholder yourself breaks the preferred native path (native mode leaves it unfilled), forcing the fallback on every call. Write your prompt as plain instructions; let `with_structured_output(Model)` do the rest.
 
 ```python
 from pydantic import BaseModel, Field
@@ -121,10 +123,10 @@ Cross-factory tool binding unavailable (security gated).
 **Loop controls:**
 - `.max_turns(n)` — runaway guard (default 50), stop with `stop_reason='max_turns'`
 - `.max_tokens(n)` — per-turn cap; **omitted defaults to 8192** (not provider default)
-- `.on_turn(cb)` — callback after each turn with `{turn, tool_calls, usage}`
+- `.on_turn(cb)` — callback after each turn with `{turn, tool_calls, usage}` where `tool_calls` is a list of tool NAMES; full `{name, args, result}` dicts are in the run `meta['tool_calls']`
 - `.inject_tool_args(mapping, tools=None)` — force args into tool calls at dispatch
 
-**Provider support:** `.run_agent_loop*` requires native `bind_tools`: **openai, openrouter, digitalocean, anthropic, google**. Ollama partial. Azure-o3 unsupported.
+**Provider support:** `.run_agent_loop*` requires native `bind_tools` support (checked per client).
 
 **Reliability (built-in):** Serial multi-tool dispatch, arg validation fed back to model, tool errors returned as results, bounded history + result caps, API retry/backoff, 8192-token per-turn default, truncation-aware (stops at length), repeat-error guardrail, partial progress on failure.
 
