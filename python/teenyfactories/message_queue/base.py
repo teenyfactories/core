@@ -76,17 +76,28 @@ _provider_instance = None
 # — strike accounting is per-row, not per-entry.
 _handlers: Dict[tuple, List[dict]] = {}
 
-# Strike tracker: (key, state, updated_at_iso) -> attempt count, or _PARKED.
-# In-memory only — a restart clears it and the row is re-attempted. A row
-# that departs its state is never returned by the poll again, so its entry
-# is never re-touched and ages out via the insertion-order cap. Near-empty
-# in healthy operation.
+# Strike tracker: (key, state, state_changed_at_iso) -> attempt count, or
+# _PARKED. Keyed on state_changed_at (NOT updated_at) so "the row moved" means
+# the same thing here as it does for the poll, which orders and re-arms on
+# state_changed_at: a transition to a new state OR a same-state re-queue that
+# bumps state_changed_at both yield a NEW key and count as progress; a pure
+# no-op keeps the key and accrues strikes. In-memory only — a restart clears it
+# and the row is re-attempted. A row that departs its state is never returned by
+# the poll again, so its entry is never re-touched and ages out via the
+# insertion-order cap. Near-empty in healthy operation.
 _strikes: "_collections.OrderedDict[tuple, int]" = _collections.OrderedDict()
 
 # Last exception text per strike key, surfaced in the eventual park log
 # (the park fires on the sighting AFTER the 5th dispatch). Evicted alongside
 # _strikes.
 _park_reason: Dict[tuple, str] = {}
+
+# Strike keys whose handler has ACTUALLY executed at least once (claim acquired
+# and handler called — whether it returned or raised). Lets the proactive no-op
+# warning tell a genuine clean no-op (handler ran, row didn't move — warn) from a
+# claim-skip where the handler never ran (see [tf:strike-on-sighting] — skips
+# still count strikes). Evicted alongside _strikes.
+_ran_keys: set = set()
 
 _MAX_ATTEMPTS = 5
 _PARKED = -1
@@ -408,6 +419,7 @@ def _evict_strikes():
     while len(_strikes) > _RETRY_TRACKER_MAX:
         old_key, _ = _strikes.popitem(last=False)
         _park_reason.pop(old_key, None)
+        _ran_keys.discard(old_key)
 
 
 def _dispatch(entries: List[dict], item: dict):
@@ -422,7 +434,7 @@ def _dispatch(entries: List[dict], item: dict):
     if coll is None or state is None:
         return
 
-    rk = (item.get('key') or '', state, _iso(item.get('updated_at')))
+    rk = (item.get('key') or '', state, _iso(item.get('state_changed_at')))
     n = _strikes.get(rk)
 
     if n == _PARKED:
@@ -432,9 +444,25 @@ def _dispatch(entries: List[dict], item: dict):
         _strikes[rk] = 1
     elif n < _MAX_ATTEMPTS:
         _strikes[rk] = n + 1
+        # Proactive no-op warning. A re-sighting with the SAME strike key proves
+        # the previous dispatch left the row exactly where it was — same state AND
+        # same state_changed_at. (A re-queue bounce bumps state_changed_at → a NEW
+        # key → treated as progress, never flagged here.) Warn ONCE, on the first
+        # re-sighting (n == 1), and only for a CLEAN no-op where the handler
+        # actually ran: an exception was already logged (recorded in _park_reason),
+        # and a claim-skip never ran the handler (rk not in _ran_keys).
+        if n == 1 and rk in _ran_keys and rk not in _park_reason:
+            log_warn(
+                f"Handler {coll}.{state} returned without advancing key={rk[0]!r} "
+                f"(state and state_changed_at unchanged) — it will re-fire and park "
+                f"after {_MAX_ATTEMPTS} attempts. Transition the row to a new state, or "
+                f"tf.collection({coll!r}).remove(...); if it aggregates many rows, it "
+                f"belongs on tf.on_schedule, not a per-row on_state handler."
+            )
     else:
         # n == _MAX_ATTEMPTS: this sighting is one past the 5th dispatch.
         _strikes[rk] = _PARKED
+        _ran_keys.discard(rk)
         reason = _park_reason.pop(rk, None) or "handler did not transition the row"
         log_error(
             f"Giving up after {_MAX_ATTEMPTS} attempts; row parked in "
@@ -469,6 +497,9 @@ def _dispatch(entries: List[dict], item: dict):
             # it doesn't, we'll see the row again on next poll and try-claim
             # afresh (claim row gone after their release, or expired via janitor).
             continue
+        # Claim held → the handler runs. Mark the strike key so a later re-sighting
+        # can tell this genuine attempt from a claim-skip (proactive-warn guard).
+        _ran_keys.add(rk)
         try:
             entry['handler'](item)
         except Exception as e:
