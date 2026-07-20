@@ -1,6 +1,6 @@
 # tf-llm — LLM calls, structured output, agent loops, embeddings
 
-> **Cross-doc refs:** Provider/model env vars in [tf-environment](id:tf-environment); data writes in [tf-data](id:tf-data).
+> **Cross-doc refs:** Provider/model env vars in [tf-environment](tf-environment.md); data writes in [tf-data](tf-data.md).
 
 ## LLM Calls
 
