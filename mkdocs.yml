@@ -40,8 +40,47 @@ theme:
 nav:
   - Home: index.md
   - Setup: setup.md
-  - The tf module: tf-module.md
-  - Composable UI: composable-ui.md
+  - The tf module:
+      - Overview: reference/tf-index.md
+      - Guide: reference/tf-guide.md
+      - Common (states, collections, agents): reference/tf-common.md
+      - Data & queries: reference/tf-data.md
+      - LLM & embeddings: reference/tf-llm.md
+      - MCP tools: reference/tf-mcp.md
+      - Environment: reference/tf-environment.md
+      - Volumes: reference/tf-volumes.md
+      - factory.yml schema: reference/factory-yaml.md
+  - Composable UI:
+      - Overview: reference/ui-index.md
+      - Guide: reference/ui-guide.md
+      - Common (keys, actions, layout, binding): reference/ui-common.md
+      - Lightweight components: reference/ui-lightweight.md
+      - Layout primitives: reference/ui-layout-primitives.md
+      - Scope-locked components: reference/ui-scope-locked.md
+      - Bar chart: reference/ui-bar_chart.md
+      - Button: reference/ui-button.md
+      - Button group: reference/ui-button_group.md
+      - Card: reference/ui-card.md
+      - Code editor: reference/ui-code_editor.md
+      - Commit modal: reference/ui-commit_modal.md
+      - Confirm destructive modal: reference/ui-confirm_destructive_modal.md
+      - Detail list: reference/ui-detail_list.md
+      - File explorer: reference/ui-file_explorer.md
+      - Force directed: reference/ui-force_directed.md
+      - Kanban: reference/ui-kanban.md
+      - Line chart: reference/ui-line_chart.md
+      - Markdown: reference/ui-markdown.md
+      - Metrics: reference/ui-metrics.md
+      - Modal: reference/ui-modal.md
+      - Multi-select: reference/ui-multi_select.md
+      - Scatter: reference/ui-scatter.md
+      - Select: reference/ui-select.md
+      - Table: reference/ui-table.md
+      - Tabs: reference/ui-tabs.md
+      - Textarea: reference/ui-textarea.md
+      - Text input: reference/ui-text_input.md
+      - Tree editor: reference/ui-tree_editor.md
+      - Treemap: reference/ui-treemap.md
 
 markdown_extensions:
   - admonition
