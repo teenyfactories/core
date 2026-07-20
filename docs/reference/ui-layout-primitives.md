@@ -40,7 +40,7 @@ Child sizing uses `config.flex` on each child:
 
 In `layout_row`: no-flex children split width; in `layout_column`: no-flex children size to content height.
 
-For axis inference, flex model details, regions, and responsive behaviour, see [Layout & responsive via read_docs:ui-common](read_docs:ui-common).
+For axis inference, flex model details, regions, and responsive behaviour, see [Layout & responsive](ui-common.md).
 
 ## Example
 
