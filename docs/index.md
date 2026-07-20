@@ -65,7 +65,7 @@ my-factory/
 <div class="grid cards" markdown>
 
 - :material-rocket-launch: **[Setup](setup.md)** — run the platform, install the library, create your first factory.
-- :material-language-python: **[The tf module](tf-module.md)** — the Python API: state, collections, LLMs, embeddings, schedules, MCP tools.
-- :material-view-dashboard: **[Composable UI](composable-ui.md)** — build a dashboard from YAML: layout, components, data binding, actions.
+- :material-language-python: **[tf reference](reference/tf-index.md)** — the Python API: runtime, collections, LLMs, MCP tools, environment, volumes.
+- :material-view-dashboard: **[Composable UI reference](reference/ui-index.md)** — build a dashboard from YAML: common rules + one doc per component.
 
 </div>
