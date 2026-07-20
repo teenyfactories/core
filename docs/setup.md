@@ -129,5 +129,5 @@ The orchestrator injects `FACTORY_NAME` / `AGENT_NAME` per container; you provid
 
 ## Next
 
-- **[The tf module](tf-module.md)** — the full Python API your agents use.
-- **[Composable UI](composable-ui.md)** — build the dashboard in `default_ui`.
+- **[The tf module](reference/tf-guide.md)** — the full Python API your agents use.
+- **[Composable UI](reference/ui-guide.md)** — build the dashboard in `default_ui`.
