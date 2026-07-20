@@ -38,7 +38,7 @@ on_click:
 
 ## Data & events
 
-**`on_click` — button pressed.** Fires a single action or array of actions (multi-dispatch). Action semantics (canonical actions, params, write semantics) are detailed in [Actions](../ui-reference.md#actions). Most common: `save_data_item` (state transition + optional data patch) and `custom:*` (page-specific handler).
+**`on_click` — button pressed.** Fires a single action or array of actions (multi-dispatch). Action semantics (canonical actions, params, write semantics) are detailed in [Actions](ui-common.md#actions). Most common: `save_data_item` (state transition + optional data patch) and `custom:*` (page-specific handler).
 
 Buttons automatically resolve `$:` JSONata expressions in action params against the live DataRef snapshot (if the button is nested under a `data:` binding) or the current page context.
 
