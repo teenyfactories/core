@@ -102,7 +102,15 @@ def add_mcp_server(name: str, description: str = ''):
 # =============================================================================
 
 def _agent_name() -> str:
-    return config.AGENT_NAME
+    # Stable identity for the MCP catalog key + each tool's `agent` field + call
+    # routing: AGENT_SLUG (the factory.yml key — lowercase-alnum/_/-), NOT
+    # AGENT_NAME (the mutable display name). The orchestrator composes the
+    # external tool name as `<agent>_<tool>`, which MUST match
+    # ^[A-Za-z0-9_-]{1,64}$ — a display name like "Meeting Collector" carries a
+    # space → an invalid MCP tool name, and renaming the display name would
+    # silently re-key the whole catalog. AGENT_NAME is only a last-resort fallback
+    # for the degenerate case where AGENT_SLUG wasn't injected.
+    return config.AGENT_SLUG or config.AGENT_NAME
 
 
 def _maybe_publish_mcp():
@@ -136,6 +144,18 @@ def _maybe_publish_mcp():
     except Exception as e:
         log_error(f"🔨 Failed to write MCP catalog row: {e}")
         # Fall through so per-tool subscriptions still register
+
+    # LEGACY: pre-slug builds keyed this catalog row by AGENT_NAME (the display
+    # name), producing invalid, mutable external tool names ("Meeting
+    # Collector_ingest_transcript"). Drop that stale row on startup so the
+    # orchestrator doesn't surface BOTH the old (invalid) and new (slug) tools.
+    # Remove this cleanup once every deployed factory has restarted post-fix.
+    legacy_key = config.AGENT_NAME
+    if legacy_key and legacy_key != agent_name:
+        try:
+            collection('_mcp_tool_catalog').remove(legacy_key)
+        except Exception as e:
+            log_debug(f"🔨 MCP catalog legacy-row cleanup skipped: {e}")
 
     if has_tools:
         tool_names = [t['name'] for t in _mcp_tools]
