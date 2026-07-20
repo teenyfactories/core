@@ -12,7 +12,7 @@ Hierarchical treemap visualization via Recharts. Displays nested rectangles size
 
 ## YAML shape
 
-Two modes: **data-bound state** with `data_field` extraction, or **collection-grouped** directly.
+Binds a state row and extracts a pre-aggregated array via `data_field`.
 
 ```yaml
 component: treemap
@@ -27,26 +27,13 @@ config:
   tooltip_fields: [name, value, percentage]
 ```
 
-Or grouped on a collection's JSONB field:
-
-```yaml
-component: treemap
-data:
-  collection: events
-config:
-  group_by: source             # JSONB field to group rows on
-  name_field: name
-  value_field: value
-```
-
 ## Config keys
 
 | Key | Required | Notes |
 |---|---|---|
-| `data_field` | ✓ (data mode) | Field on `row.data` containing the array of objects. |
+| `data_field` | ✓ | Field on `row.data` containing the array of objects. |
 | `name_field` | ✓ | Field name for item labels. |
 | `value_field` | ✓ | Numeric field; drives rectangle size. |
-| `group_by` | ✓ (collection mode) | JSONB field to group rows on. |
 | `tooltip_fields` | — | Array of field names for hover tooltip (default: `[name, value]`). |
 | `title` | — | Optional heading above the chart (supports `$:` expressions against the row). |
 

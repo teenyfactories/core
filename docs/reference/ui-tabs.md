@@ -64,5 +64,5 @@ children:
 - **No `config.tabs:` array form.** Only interleaved slot-paired `children` are valid; `check_ui` rejects `config.tabs`.
 - **Slot contract is enforced** — `check_ui` (backend) and `types/Tabs.js` (render-time) both validate pairing. Unequal counts or missing `slot:` values cause rejection.
 - **URL persistence is automatic at page level** — active tab index is mirrored to search param (key = `id:` or `tab`). Refresh/bookmark preserves state.
-- **Inside transient hosts (modal/drawer), persistence is suppressed** — context automatically disables URL sync. Each open resets to `default_tab`.
+- **Inside transient hosts (modal/drawer), persistence is suppressed** — context automatically disables URL sync. Each open resets to `default_tab`. Tabs inside a modal are the canonical **rich record view** (overview · edit form · related records) — for a full worked table→tabbed-modal example see `read_docs{ doc: "ui-table" }` § CRUD.
 - **Nested Tabs must have unique `id:`** to avoid URL param collisions.

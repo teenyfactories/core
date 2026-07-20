@@ -27,18 +27,6 @@ config:
   y_label: <label>
 ```
 
-Alternative via `group_by`:
-```yaml
-component: line_chart
-data:
-  collection: <collection_name>
-config:
-  group_by: day
-  days: <count>
-  x_field: day
-  y_field: count
-```
-
 ## Config keys
 
 | Key | Type | Required | Notes |
@@ -50,12 +38,10 @@ config:
 | `series_field` | string | No | Field to group into separate lines. |
 | `x_label` | string | No | X-axis label. |
 | `y_label` | string | No | Y-axis label. |
-| `group_by` | string | No | Aggregate mode (`day`). |
-| `days` | number | No | Number of days to retrieve in `group_by` mode. |
 
 ## Data & events
 
-Reads from `data.collection` at `data.state`. With `latest: true`, fetches the single latest row; rows must contain either `data_field` (array) or raw aggregates for `group_by` mode. No events emitted; chart is read-only.
+Reads from `data.collection` at `data.state`. With `latest: true`, fetches the single latest row; the row must contain `data_field` (the array of chart points). No events emitted; chart is read-only.
 
 ## Example
 
@@ -79,4 +65,4 @@ config:
 
 - Title `$: field` resolves against the chart row only; use plain strings for static text.
 - `series_field` requires data to contain distinct values; too many groups may render illegibly.
-- In `group_by` mode, ignore `data_field` and provide aggregated rows directly from the collection.
+- The chart renders a pre-aggregated array from `data_field`; do the aggregation in an agent that writes the chart row, not in the component.

@@ -29,11 +29,12 @@ Single-series form (omit `series_field`):
 ```yaml
 component: bar_chart
 data:
-  collection: events
+  collection: events_tally
+  latest: true
 config:
-  group_by: source
-  x_field: source
-  y_field: count
+  data_field: tally       # array field on row.data
+  x_field: source         # x-axis category
+  y_field: count          # bar height
 ```
 
 ## Config keys
@@ -45,7 +46,6 @@ config:
 | `series_field` | string | Field defining series (optional; omit for single series) |
 | `stacked` | boolean | `false` (default, grouped) or `true` (stacked layout) |
 | `x_label`, `y_label` | string | Axis labels |
-| `group_by` | string | Single-series grouping field |
 | `scale.scheme` | string | Color palette (default: `theme_categorical`); do NOT hardcode bar colours |
 
 ## Data & events
@@ -67,7 +67,7 @@ config:
 ```yaml
 component: bar_chart
 config:
-  group_by: source
+  data_field: tally
   x_field: source
   y_field: count
 ```

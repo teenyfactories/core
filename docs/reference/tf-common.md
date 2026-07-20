@@ -67,12 +67,18 @@ A row that stays in the state — whether the handler **raised** OR **returned c
 Giving up after 5 attempts; row parked in {collection}.{state} key=...: <reason>
 ```
 
-Each failed attempt also logs `Handler {collection}.{state} failed on key=... attempt n/5: <err>`.
+Each failed attempt also logs `Handler {collection}.{state} failed on key=... attempt n/5: <err>`. And on the **first re-sighting of a clean no-op** — a handler that ran, returned without error, and left the row exactly where it was (same state AND same `state_changed_at`) — core emits an immediate `[WARN]`, so a stuck handler surfaces on the very next poll instead of only at the 5-strike park:
 
-Strike accounting is **in-memory and per-row**, keyed `(key, state, updated_at)`:
+```
+Handler {collection}.{state} returned without advancing key=... (state and state_changed_at unchanged) — it will re-fire and park after 5 attempts...
+```
+
+(No such warning for a handler that **raised** — that already logs an `[ERROR]` — or for a **claim-skip**, where the handler never ran.)
+
+Strike accounting is **in-memory and per-row**, keyed `(key, state, state_changed_at)`:
 
 - A **process restart** wipes the strike map → the row is re-attempted. This is intentional: a restart implies a fix was shipped.
-- A **genuine rewrite** of the row (any write that bumps `updated_at`) is a new strike key → the count resets to fresh work.
+- A **genuine re-queue** — a state transition, or an explicit same-state re-stamp that bumps `state_changed_at` (the value both the poll and the strike map key on) — is a new strike key → the count resets to fresh work. A data-only write that leaves `state_changed_at` unchanged does NOT reset it: the row keeps its strike key and still parks.
 - Insertion-order-capped at 2048 simultaneously-failing rows; healthy operation keeps it near-empty.
 
 No per-row "safety re-fire" for idempotent aggregators — use `tf.on_schedule` instead of relying on re-dispatch.

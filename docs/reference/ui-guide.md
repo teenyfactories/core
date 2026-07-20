@@ -34,7 +34,7 @@ Sortable/paginated rows → `ui-table` · rows grouped by state, drag to transit
 
 **ui-bar_chart** — categorical bars, single/multi-series, grouped or stacked. Category comparison. Not dense time-series (`ui-line_chart`).
 
-**ui-line_chart** — time-series/trend, `data_field` array mode or `group_by` aggregation mode. Values over time, multi-line comparison. Not a single value or hierarchical data.
+**ui-line_chart** — time-series/trend, `data_field` array mode. Values over time, multi-line comparison. Not a single value or hierarchical data.
 
 **ui-treemap** — nested rectangles sized/coloured by value, flat array only. Proportional breakdowns. No true multi-level nesting yet; not time-series or category bars.
 
