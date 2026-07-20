@@ -62,7 +62,7 @@ No native data binding on the card itself. The card body is a region; children m
 
 ## Gotchas
 
-- **Region axis inference** — see [Layout & responsive via read_docs:ui-common](read_docs:ui-common) for full rules. A card body mixing `layout_row` + `layout_column` siblings is invalid (`no-mixed-axis`).
+- **Region axis inference** — see [Layout & responsive](ui-common.md) for full rules. A card body mixing `layout_row` + `layout_column` siblings is invalid (`no-mixed-axis`).
 - **flex goes on config** — use `config: { flex: N }` to fill space, never `style: { flex: ... }`.
 - **Slot defaults to body** — children with no explicit `slot:` go into the body region.
 - **Padding is automatic** — the region applies `--spacing-panel` inset padding; do not wrap content in extra spacing layers.
