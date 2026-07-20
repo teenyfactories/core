@@ -13,13 +13,13 @@ Two access patterns:
     or empty. Use this for credentials and other "must be set" values
     instead of letting None propagate to a downstream SDK error.
 
-Policy (set with the user 2026-04-28):
+Policy:
   • Mandatory values fail loud at use-site — no silent defaults.
   • The orchestrator-side compose file uses `${VAR:?required}` so missing
     values fail at compose-up too; this module is the runtime backstop
     when an agent runs outside the orchestrator's spawning path.
 
-Resolution cascade (2026-06-14):
+Resolution cascade:
   `get()` / `require()` resolve a value by asking the orchestrator's
   in-built secrets/runtime-var store FIRST (tf.secrets → :8998 managed
   table → its own env fallback), and only consult os.environ when the

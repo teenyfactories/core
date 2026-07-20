@@ -117,7 +117,7 @@ Agents read configuration from environment variables. The most common:
 
 | Variable | Purpose |
 |---|---|
-| `DEFAULT_LLM_PROVIDER` | `openai` · `anthropic` · `google` · `ollama` · `azure_bedrock` |
+| `DEFAULT_LLM_PROVIDER` | `openai` · `anthropic` · `google` · `ollama` · `azure_bedrock` · `digitalocean` · `openrouter` |
 | `DEFAULT_LLM_MODEL` | Model name (also overridable per call via `tf.llm().model(...)`) |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` | Provider credentials |
 | `DEFAULT_EMBEDDING_PROVIDER` | `openai` · `ollama` · `openrouter` |
@@ -129,5 +129,5 @@ The orchestrator injects `FACTORY_NAME` / `AGENT_NAME` per container; you provid
 
 ## Next
 
-- **[The tf module](tf-module.md)** — the full Python API your agents use.
-- **[Composable UI](composable-ui.md)** — build the dashboard in `default_ui`.
+- **[The tf module](reference/tf-guide.md)** — the full Python API your agents use.
+- **[Composable UI](reference/ui-guide.md)** — build the dashboard in `default_ui`.
