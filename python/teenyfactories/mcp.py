@@ -4,7 +4,9 @@ MCP Tool Registration
 Factories expose tools to the orchestrator's LLM chat via dedicated collections
 in factory_data:
 
-- `_mcp_tool_catalog` — one row per agent. key=AGENT_NAME, data={server, tools}
+- `_mcp_tool_catalog` — one row per agent. key=AGENT_SLUG (the stable
+  factory.yml key; falls back to AGENT_NAME only if the slug wasn't injected),
+  data={server, tools}
   if MCP is configured, else {}. Written once on first `tf.run_pending()`.
 - `_mcp_{toolname}` — one row per call. key=correlation_id.
   state progresses 'request' -> 'response' on the same row; the call's
