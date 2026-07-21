@@ -2,8 +2,10 @@
 
 Agent runtime for [TeenyFactories](https://github.com/teenyfactories/core). Postgres-backed pub/sub, multi-provider LLM calls, vector search.
 
+📖 **Documentation: [teenyfactories.github.io/core](https://teenyfactories.github.io/core/)**
+
 ```bash
-pip install --pre teenyfactories
+pip install teenyfactories
 ```
 
 ```python
@@ -55,7 +57,7 @@ Full setup, compose templates, environment variable reference: see the [core rep
 
 ## Versioning
 
-PEP 440 dev pre-releases: `0.1.0.devYYYYMMDD`. `pip install teenyfactories` will NOT pick these up — you need `--pre` (latest dated build) or an explicit pin (`teenyfactories==0.1.0.dev20260512`).
+Semantic versioning; current release **1.0.0** (`pip install teenyfactories`). The version is declared in `pyproject.toml` and `teenyfactories/__version__.py` (kept in lockstep) and published to PyPI by CI on push to `main`, idempotent per version.
 
 ## License
 

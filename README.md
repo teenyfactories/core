@@ -18,7 +18,7 @@ while True:
 
 | | |
 |---|---|
-| [`python/`](python/) | The `teenyfactories` library. **MIT open source.** `pip install --pre teenyfactories`. Full library docs in [`python/README.md`](python/README.md) — also the PyPI page. |
+| [`python/`](python/) | The `teenyfactories` library. **MIT open source.** `pip install teenyfactories`. Full library docs in [`python/README.md`](python/README.md) — also the PyPI page. |
 | `ghcr.io/teenyfactories/agent:dev` | Container base image with the library pre-installed. Every factory agent runs on this. Built from `python/Dockerfile.build`. |
 
 ## What sits around it
