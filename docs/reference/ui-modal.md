@@ -10,6 +10,14 @@ A surface that opens and closes over the main page, commonly for editing detail 
 
 **Avoid when:** complex enough for a dedicated route, or you need stateful UI (Tabs, sort, filter) to persist across opens.
 
+## Placement — where it goes in the tree
+
+A modal is **React-portaled and opened by `id:`** — it resolves against the page-level id registry, not literal DOM siblings, so its position in the layout is irrelevant as long as it's **mounted** when its trigger fires. It renders **out of flow**, so it is NOT an in-flow layout child.
+
+- **Nest each modal inside the panel/card that opens it** (a tab's `slot: panel`, the card holding the button/table). Those regions already hold in-flow content, so the modal adds no layout.
+- **Do NOT hoist modals to the root**, and **do NOT wrap the layout in a `layout_column` just to sit modals beside the rest** — that root wrapper is a redundant singleton (see `ui-common` § `redundant-singleton`) and collapses a fill child (a root `tabs` renders as a zero-height sliver).
+- **When the root would be a `tabs`, keep `tabs` as the single root node.** Put each modal in the tab panel that triggers it. (A modal opened from several tabs can live in any one mounted panel, or in a card that's always present.)
+
 ## YAML shape
 
 Two forms supported. **Named-key form (current default):**

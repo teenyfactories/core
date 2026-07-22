@@ -151,6 +151,24 @@ A region must not contain both a `layout_row` and a `layout_column` sibling — 
           children: [ ... ]
 ```
 
+### `redundant-singleton` (check_ui warning)
+
+A layout primitive earns its keep by laying **multiple** children out. `check_ui` (`schemas/validate.js`) flags a wrapper that has nothing to lay out:
+
+- a **`layout_column` / `layout_row` with exactly one in-flow child** — it adds no layout but still imposes its own flex defaults on that child (`flex: 1 1 0; align-items: stretch`), so the child stretches to the wrapper instead of sitting naturally in the parent slot. Fix: promote the single child into the wrapper's slot (delete the wrapper). Out-of-flow children — `modal`, `commit_modal`, `confirm_destructive_modal` (React-portaled, not flex siblings) — **don't count**, so `layout_column` children `[tabs, modal]` is still a singleton (one in-flow child). Applies to the **root** too.
+- a **`tabs` with exactly one `slot: tab` / `slot: panel` pair** — a one-tab strip has nothing to switch to; render the panel's content directly.
+
+**Suppressed** (left alone) when the wrapper carries meaningful differentiating config that positions/sizes the child: `config.justify`, `config.align`, `config.flex`, or a top-level `style:` — e.g. a `layout_column { config: { justify: center } }` that exists purely to centre its child is legitimate. `config.gap` does **not** suppress it (gap only spaces siblings, so it's inert on a lone child).
+
+```yaml
+# WRONG: a column wrapping a single table adds nothing
+- component: layout_column
+  children:
+    - { component: table, data: { collection: rows } }
+# RIGHT: use the table directly in the parent slot
+- { component: table, data: { collection: rows } }
+```
+
 ### Child sizing — `config.flex`
 
 Omitted, in a `layout_row`: grow/split width equally (`flex: 1 1 0`) — why a row of columns splits width with no per-child config. Omitted, in a `layout_column`: content height (`flex: 0 0 auto`), so a column of form fields isn't squished — opt one child into filling with `config: { flex: 1 }`. `flex: N` (N>0): N shares of leftover space along the main axis AND fills the cross axis (a card/chart/table given `flex: 1` fills its whole box; larger N = larger share). `flex: 0`: size to content, no grow, no cross-axis fill — header strips, `metrics` rows, `button_group`.
@@ -364,7 +382,9 @@ A composite "Overview tab" (field record + summary) is built from `detail_list` 
 
 ### `open:` accepts a string id only
 
-Click-opens-a-component contracts (`config.on_node_click.open`, `config.on_point_click.open`, table `detail_modal`, any future `open:`) take a **string id only** — the `id:` of a registered sibling.
+Click-opens-a-component contracts (`config.on_node_click.open`, `config.on_point_click.open`, table `detail_modal`, any future `open:`) take a **string id only** — the `id:` of an id-registered component (a `modal`) mounted anywhere in the same view.
+
+**"Sibling" is about the id registry, not the DOM.** `open:` resolves against the page-level id registry (the nearest `DataRefProvider`), NOT literal tree siblings — and a `modal` is React-portaled, so its position in the layout is irrelevant as long as it's mounted. Practical rules: place each modal **inside the panel/card that opens it** (a tab's panel, the card holding the trigger); it renders out of flow, so it does NOT count as an in-flow layout child. You therefore never need to **hoist modals up to the root** or **wrap the layout in a `layout_column` to make them "siblings"** — that root wrapper is a redundant singleton and collapses a fill child (e.g. a root `tabs`). When the root would be a `tabs`, keep `tabs` as the single root node and nest each modal in its triggering panel.
 
 ```yaml
 - component: force_directed
