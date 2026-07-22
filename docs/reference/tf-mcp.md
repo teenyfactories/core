@@ -30,7 +30,8 @@ tf.add_mcp_tool('tool_name', 'Description for the LLM') \
 
 # Order of add_mcp_server() vs add_mcp_tool() doesn't matter.
 # On the first tf.run_pending() tick, the core:
-#   1. Writes a row to `_mcp_tool_catalog` (key = AGENT_NAME).
+#   1. Writes a row to `_mcp_tool_catalog` (key = AGENT_SLUG, the stable
+#      factory.yml agent key; falls back to AGENT_NAME only if slug wasn't injected).
 #      - data = {server, tools} if MCP is configured
 #      - data = {} if no tools were registered (explicit signal)
 #   2. Subscribes via tf.on_state('_mcp_{tool_name}', 'request')
@@ -67,7 +68,7 @@ Each tool has its own collection `_mcp_{tool_name}`. A call is a single row whos
 | Step | Actor | What |
 |---|---|---|
 | 1 | orchestrator backend | INSERT row `(collection=_mcp_{tool}, key=correlation_id, state='request', data={agent, params})` |
-| 2 | agent's `on_state('_mcp_{tool}', 'request')` handler | Sees the row. Checks `data.agent == AGENT_NAME`; if not, silently skips. |
+| 2 | agent's `on_state('_mcp_{tool}', 'request')` handler | Sees the row. Checks `data.agent == AGENT_SLUG` (fallback `AGENT_NAME`); if not, silently skips. |
 | 3 | agent | Executes handler; UPDATEs the same row to `state='response'` with `data.result` or `data.error`. |
 | 4 | orchestrator backend | Polls the row by key until state = 'response'; returns `data.result` to the LLM. |
 
