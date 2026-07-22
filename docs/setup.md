@@ -13,7 +13,7 @@ This page gets you from zero to a running factory. There are two ways to run: **
 The `teenyfactories` library is on PyPI (pre-release):
 
 ```bash
-pip install --pre teenyfactories
+pip install teenyfactories
 ```
 
 You rarely install it by hand for running factories — the agent base image `ghcr.io/teenyfactories/agent:dev` ships with it pre-installed. Install it locally for editor autocomplete, type-checking, and tests.

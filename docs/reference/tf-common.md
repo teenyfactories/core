@@ -61,6 +61,13 @@ def escalate_if_still_submitted(item):
 
 Subscribing to `(collection, state)` means *"process every row currently in that state, oldest first (FIFO, ordered `state_changed_at ASC, key ASC`)."* The state itself is the queue — there is no cursor. **Your handler MUST move the trigger row out of its input state on success** — transition via `tf.collection(...).set(key, state='next', data=...)` or delete via `.remove(key)`. A row left in its input state (handler returned without transitioning, or an aggregator that only reads and writes elsewhere) is NOT consumed: it re-fires every poll and parks after 5 attempts. If a handler's job is to aggregate/read many rows rather than advance one, it belongs on a schedule (`tf.on_schedule`), not an `on_state` subscription.
 
+**One handler per `(collection, state)` — subscriptions are UNIQUE across the whole factory.** Exactly one `.do` handler may subscribe any given `(collection, state)`. Do NOT wire two handlers (in the same agent OR in two different agents) to the same state:
+
+- *Same process (one agent, two `.do`s):* strike/retry accounting is per-row, not per-handler, so both handlers duplicate-execute the succeeding one — core logs a loud `[WARN]` at registration.
+- *Different agents/processes:* each dispatch is wrapped in a claim (`try_claim`/`release_claim`, see the claims layer), and **only ONE worker can claim each row**. Which agent's handler wins is non-deterministic; the loser silently skips. There is no cross-process warning — each process only sees its own subscriptions — so this stays invisible until rows go missing.
+
+To have several things happen when a row reaches a state, **fan the work out to DISTINCT next-states**: one handler advances `Order: Paid` → writes `Order: Invoiced` AND `Order: Shipped` (or a fan-out collection), and a separate handler subscribes each of those. Never model "two workers on one queue" by double-subscribing one state. `check_all` reports any `(collection, state)` subscribed by 2+ agents as an ERROR; `check_python` flags a single agent that subscribes one state twice.
+
 A row that stays in the state — whether the handler **raised** OR **returned cleanly without transitioning** (both are counted identically) — is re-dispatched on the next poll. After **5 such non-departures** the row is **parked**: skipped silently until the process restarts, with one `[ERROR]` log:
 
 ```

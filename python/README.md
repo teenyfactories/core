@@ -2,8 +2,10 @@
 
 Agent runtime for [TeenyFactories](https://github.com/teenyfactories/core). Postgres-backed pub/sub, multi-provider LLM calls, vector search.
 
+📖 **Documentation: [teenyfactories.github.io/core](https://teenyfactories.github.io/core/)**
+
 ```bash
-pip install --pre teenyfactories
+pip install teenyfactories
 ```
 
 ```python
@@ -27,7 +29,7 @@ Writing a row into a `(collection, state)` makes every subscriber to that pair p
 | Pub/sub | `on_state`, `run_pending` (the only pub/sub primitive — no message bus) |
 | Data | `collection` (`.set`, `.add`, `.get`, `.get_all`, `.remove`, `.count`, `.exists`, `.first`, `.state`, `.where`, `.limit`, `.vector_search`), `embed` |
 | LLM | `llm` (fluent builder — `.ask` / `.run_agent_loop`), `call_llm` (LEGACY) |
-| MCP | `add_mcp_server`, `add_mcp_tool` |
+| MCP | `add_mcp_server`, `add_mcp_tool` (tool `name` must match `^[a-zA-Z0-9_-]{1,64}$` — it becomes a `_mcp_<name>` collection + NOTIFY channel; a bad name is logged as an ERROR and skipped) |
 | Schedule | `on_schedule.every(N).<unit>.do(handler)` |
 | Secrets / files | `secrets`, `bucket_store` (+ `BucketStoreError` family) |
 | Logging | `log_debug`, `log_info`, `log_warn`, `log_error`, `log_persona` |
@@ -55,7 +57,7 @@ Full setup, compose templates, environment variable reference: see the [core rep
 
 ## Versioning
 
-PEP 440 dev pre-releases: `0.1.0.devYYYYMMDD`. `pip install teenyfactories` will NOT pick these up — you need `--pre` (latest dated build) or an explicit pin (`teenyfactories==0.1.0.dev20260512`).
+Semantic versioning; current release **1.0.0** (`pip install teenyfactories`). The version is declared in `pyproject.toml` and `teenyfactories/__version__.py` (kept in lockstep) and published to PyPI by CI on push to `main`, idempotent per version.
 
 ## License
 
