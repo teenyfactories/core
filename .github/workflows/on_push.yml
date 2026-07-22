@@ -17,12 +17,12 @@
 #   3. publish-pypi (teenyfactories wheel + sdist)       — runs on push to main,
 #                                                          needs BOTH license
 #                                                          checks. Version =
-#                                                          0.1.0.devYYYYMMDD
-#                                                          (UTC). PEP 440 dev
-#                                                          pre-release — pip
-#                                                          installs need `--pre`.
+#                                                          pyproject.toml
+#                                                          [project].version
+#                                                          (lockstep-checked vs
+#                                                          __version__.py).
 #                                                          Idempotent — skips if
-#                                                          today's version is
+#                                                          that version is
 #                                                          already on PyPI.
 #   4. publish-npm (teenyfactories placeholder package)   — runs on push to main,
 #                                                          needs BOTH license
@@ -176,14 +176,14 @@ jobs:
           provenance: false
 
   # ── Stage 3 — publish to PyPI ────────────────────────────────────────────
-  # Date-based versioning: 0.1.0.devYYYYMMDD (UTC). PEP 440 dev pre-release —
-  # `pip install teenyfactories` won't pick these up without `--pre`. One
-  # publish per day, idempotent — if today's version is already on PyPI, the
-  # job logs and skips rather than failing. Requires the `PYPI_API_TOKEN`
-  # repo secret.
+  # Source-version-driven: publishes the version declared in python/pyproject.toml
+  # (kept in lockstep with teenyfactories/__version__.py — a guard step enforces
+  # it). Idempotent per version — if that version is already on PyPI the job logs
+  # and skips rather than failing. To release, bump the version in a commit to
+  # main. Requires the `PYPI_API_TOKEN` repo secret.
 
   publish-pypi:
-    name: publish (PyPI, 0.1.0.devYYYYMMDD)
+    name: publish (PyPI — pyproject version)
     needs: [license-check, license-check-extras]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -195,12 +195,23 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Compute date-based version
+      - name: Read package version
         id: version
+        working-directory: python
         run: |
-          VERSION="0.1.0.dev$(date -u +%Y%m%d)"
+          VERSION=$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Computed version: $VERSION"
+          echo "Package version: $VERSION"
+
+      - name: Verify __version__.py is in lockstep with pyproject
+        working-directory: python
+        run: |
+          RUNTIME=$(python -c "import importlib.util as u; s=u.spec_from_file_location('v','teenyfactories/__version__.py'); m=u.module_from_spec(s); s.loader.exec_module(m); print(m.__version__)")
+          if [ "$RUNTIME" != "${{ steps.version.outputs.version }}" ]; then
+            echo "::error::version drift — pyproject=${{ steps.version.outputs.version }} but __version__.py=$RUNTIME"
+            exit 1
+          fi
+          echo "version consistent: $RUNTIME"
 
       - name: Check whether version is already on PyPI
         id: check
@@ -214,13 +225,6 @@ jobs:
             echo "exists=false" >> "$GITHUB_OUTPUT"
             echo "Version not yet on PyPI — will publish."
           fi
-
-      - name: Pin version in pyproject.toml
-        if: steps.check.outputs.exists == 'false'
-        working-directory: python
-        run: |
-          sed -i 's/^version = .*/version = "${{ steps.version.outputs.version }}"/' pyproject.toml
-          grep '^version' pyproject.toml
 
       - name: Build sdist + wheel
         if: steps.check.outputs.exists == 'false'
