@@ -96,7 +96,16 @@ The goal is **CRUD-completeness for collections users should act on**: if a coll
 Declare the record view as a SIBLING `modal` with an `id:`; the table's `on_row_click: { open: <id> }` publishes the clicked row onto the DataRef, so the modal's descendants resolve `$: row.<field>`. A record modal is a `tabs` block (tab/panel pairs), not a flat `detail_list`, and its `footer` carries the CRUD actions (edit-save, delete):
 
 ```yaml
-- component: layout_column
+# The record modal below is React-portaled (opened by id) — it is NOT a flex
+# sibling of the table and needs NO layout wrapper; it only has to be MOUNTED in
+# the same view. NEVER add a `layout_column`/`layout_row` just to sit a modal
+# beside a table — that's a redundant singleton (see ui-common § redundant-
+# singleton). Put the modal in whatever already hosts the table (a titled `card`
+# here). When the page root is `tabs`, nest the modal inside the tab panel that
+# opens it and keep `tabs` as the SINGLE root — don't wrap the lot in a
+# `layout_column` to make the modal a "sibling".
+- component: card
+  title: Clients
   children:
     - component: table
       data: { collection: client, state: active }
