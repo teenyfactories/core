@@ -10,13 +10,35 @@ A surface that opens and closes over the main page, commonly for editing detail 
 
 **Avoid when:** complex enough for a dedicated route, or you need stateful UI (Tabs, sort, filter) to persist across opens.
 
-## Placement — where it goes in the tree
+## Placement — declare modals in `default_ui.modals`
 
 A modal is **React-portaled and opened by `id:`** — it resolves against the page-level id registry, not literal DOM siblings, so its position in the layout is irrelevant as long as it's **mounted** when its trigger fires. It renders **out of flow**, so it is NOT an in-flow layout child.
 
-- **Nest each modal inside the panel/card that opens it** (a tab's `slot: panel`, the card holding the button/table). Those regions already hold in-flow content, so the modal adds no layout.
-- **Do NOT hoist modals to the root**, and **do NOT wrap the layout in a `layout_column` just to sit modals beside the rest** — that root wrapper is a redundant singleton (see `ui-common` § `redundant-singleton`) and collapses a fill child (a root `tabs` renders as a zero-height sliver).
-- **When the root would be a `tabs`, keep `tabs` as the single root node.** Put each modal in the tab panel that triggers it. (A modal opened from several tabs can live in any one mounted panel, or in a card that's always present.)
+**Declare modals in the top-level `default_ui.modals` array** — a sibling of `default_ui.layout`, keyed by `id:`. They mount page-level (inside the same data context as the layout), so ANY trigger — a button, a table `on_row_click`, or the chat `open_ui_modal` tool — opens one by id, and ONE modal def is reusable from many trigger sites.
+
+```yaml
+default_ui:
+  layout:
+    component: card
+    title: Clients
+    children:
+      - component: table
+        data: { collection: client, state: active }
+        on_row_click: { open: client_modal }     # opens the modal below by id
+  modals:
+    - component: modal
+      id: client_modal
+      title: '$: row.name'
+      body: [ ... ]
+    - component: modal
+      id: new_client_modal
+      title: New client
+      body: [ ... ]
+```
+
+- **DEPRECATED — nesting a modal in the layout tree.** A `modal` placed inside a `card` / `layout_column` / tab panel still works but is deprecated (`edit_ui` emits a warning) and will be removed in a future version. Move it to `default_ui.modals`.
+- **NEVER wrap the layout in a `layout_column` just to sit a modal beside a table/card** — modals aren't in-flow, so that wrapper wraps a single child: a `redundant-singleton` (see `ui-common` § `redundant-singleton`) that `edit_ui` REFUSES. `default_ui.modals` removes any need for such a wrapper, and keeps a root `tabs` as the single root node.
+- A modal opened from several places (several tabs, a row + a button) is declared **once** in `default_ui.modals` and opened by id from each.
 
 ## YAML shape
 
