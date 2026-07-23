@@ -33,9 +33,15 @@ config:
   row_actions:
     - { icon: check, action: save_data_item, collection: review_queue, key: "$: invoice_id", state: approved }
     - { icon: eye, action: open, id: invoice_detail_modal }
-  on_row_click:
-    open: invoice_detail_modal
+on_row_click:            # TOP-LEVEL on the component — a SIBLING of `config:`, NOT inside it
+  open: invoice_detail_modal
 ```
+
+> **Placement:** `on_row_click` is read at the component top level (`component.on_row_click`), a
+> sibling of `data:` / `config:` — **not** a key inside `config:`. Nesting it under `config:`
+> disables row-click at runtime (rows just aren't clickable). `check_ui` rejects this
+> (`misplaced-under-config` error — see `ui-common`), so `edit_ui` refuses the save. `row_actions`
+> DOES live inside `config:`; `on_row_click` does not — don't mirror its placement.
 
 ## Config keys
 
@@ -98,12 +104,12 @@ Declare the record view as a SIBLING `modal` with an `id:`; the table's `on_row_
 ```yaml
 # The record modal below is React-portaled (opened by id) — it is NOT a flex
 # sibling of the table and needs NO layout wrapper; it only has to be MOUNTED in
-# the same view. NEVER add a `layout_column`/`layout_row` just to sit a modal
-# beside a table — that's a redundant singleton (see ui-common § redundant-
-# singleton). Put the modal in whatever already hosts the table (a titled `card`
-# here). When the page root is `tabs`, nest the modal inside the tab panel that
-# opens it and keep `tabs` as the SINGLE root — don't wrap the lot in a
-# `layout_column` to make the modal a "sibling".
+# the same view. PREFER declaring it in the top-level `default_ui.modals` array
+# (page-level, keyed, reusable from many triggers — see ui-modal); nesting it in
+# the layout (as shown below) still works but is DEPRECATED (edit_ui warns).
+# NEVER add a `layout_column`/`layout_row` just to sit a modal beside a table —
+# that's a redundant singleton (see ui-common § redundant-singleton) that edit_ui
+# refuses. Keep a root `tabs` as the SINGLE root node.
 - component: card
   title: Clients
   children:
