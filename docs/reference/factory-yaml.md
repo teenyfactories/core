@@ -28,9 +28,14 @@ base_image: ghcr.io/...              # optional factory-level image override; fa
 volumes: [...]                       # optional; see Volumes below
 states: {...}                        # "Collection: State" keyed map; see States below
 agents: {...}                        # slug-keyed map; see Agents below
-default_ui:                          # optional; the Composable UI tree (read_reference_ui)
-  layout: {...}
+default_ui:                          # optional; the Composable UI (read_reference_ui)
+  layout: {...}                      #   the single root component tree
+  modals: [...]                      #   optional; page-level keyed modals opened by id
 ```
+
+`default_ui.modals` is an array of `component: modal` nodes, each with a unique
+`id:`, mounted page-level and opened by id from any trigger (`{ action: open, id }`)
+— see `ui-modal`. Declaring a `modal` inside `layout` still works but is deprecated.
 
 `title` is the only required key. The schema is **strict** at the top level — an
 unknown key (a typo like `titel:` or `icon2:`) is rejected.
