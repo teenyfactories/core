@@ -155,7 +155,7 @@ A region must not contain both a `layout_row` and a `layout_column` sibling — 
 
 A layout primitive earns its keep by laying **multiple** children out. `check_ui` (`schemas/validate.js`) flags a wrapper that has nothing to lay out:
 
-- a **`layout_column` / `layout_row` with exactly one in-flow child** — it adds no layout but still imposes its own flex defaults on that child (`flex: 1 1 0; align-items: stretch`), so the child stretches to the wrapper instead of sitting naturally in the parent slot. Fix: promote the single child into the wrapper's slot (delete the wrapper). Out-of-flow children — `modal`, `commit_modal`, `confirm_destructive_modal` (React-portaled, not flex siblings) — **don't count**, so `layout_column` children `[tabs, modal]` is still a singleton (one in-flow child). Applies to the **root** too.
+- a **`layout_column` / `layout_row` with exactly one in-flow child** — it adds no layout but still imposes its own flex defaults on that child (`flex: 1 1 0; align-items: stretch`), so the child stretches to the wrapper instead of sitting naturally in the parent slot. Fix: promote the single child into the wrapper's slot (delete the wrapper). Out-of-flow children — `modal`, `commit_modal`, `confirm_destructive_modal` (React-portaled, not flex siblings) — **don't count**, so `layout_column` children `[tabs, modal]` is still a singleton (one in-flow child). Applies to the **root** too. If the wrapper exists only to co-host a modal beside one real child, move the modal to the top-level **`default_ui.modals`** array (see `ui-modal`) and delete the wrapper.
 - a **`tabs` with exactly one `slot: tab` / `slot: panel` pair** — a one-tab strip has nothing to switch to; render the panel's content directly.
 
 **Suppressed** (left alone) when the wrapper carries meaningful differentiating config that positions/sizes the child: `config.justify`, `config.align`, `config.flex`, or a top-level `style:` — e.g. a `layout_column { config: { justify: center } }` that exists purely to centre its child is legitimate. `config.gap` does **not** suppress it (gap only spaces siblings, so it's inert on a lone child).
@@ -167,6 +167,26 @@ A layout primitive earns its keep by laying **multiple** children out. `check_ui
     - { component: table, data: { collection: rows } }
 # RIGHT: use the table directly in the parent slot
 - { component: table, data: { collection: rows } }
+```
+
+### `misplaced-under-config` (check_ui error)
+
+Some keys are read from the **component node**, never from `config:`. Nesting one inside `config:` is a silent dud — no runtime error, the content just never mounts or the handler never fires. `check_ui` (`schemas/validate.js`) now rejects them so `edit_ui` refuses the save instead of shipping a dead UI:
+
+- **`children:` / `data:` / `component:`** under `config:` → the subtree never mounts (observed: a `detail_modal` whose inputs were nested under `config:` → dead fields, no error).
+- **`on_row_click:`** under `config:` → the whole table's row-click is inert: no pointer cursor, no detail modal, no error (observed in the wild: a factory whose entire opportunity/programme tables were unclickable). `on_row_click` is a **top-level sibling of `config:`** — unlike `row_actions:`, which correctly lives **inside** `config:`. Don't mirror `row_actions`' placement.
+
+```yaml
+# WRONG: on_row_click buried in config → rows silently unclickable
+- component: table
+  config:
+    columns: [ { field: name, label: Name } ]
+    on_row_click: { open: detail_modal }
+# RIGHT: on_row_click is a sibling of config
+- component: table
+  config:
+    columns: [ { field: name, label: Name } ]
+  on_row_click: { open: detail_modal }
 ```
 
 ### Child sizing — `config.flex`
@@ -374,7 +394,7 @@ Two traps: (1) **Only string leaves evaluate** — `resolveValue` evaluates only
 
 ### `$:` evaluation is render-time only (Model A doctrine)
 
-One evaluator, `ComponentRenderer`, at render time, against the current DataRef — parents never pre-evaluate a child's YAML. If a click-handler needs the clicked subject visible to children, the parent publishes the subject into the DataRef instead: `force_directed` node click merges `{ node: <clonedNode> }`, `scatter` point click merges `{ point: <clonedPoint> }`, `table` row click / `row_actions` merges `{ row: <clonedRow> }`. Children in the opened subtree read `$:node.type`, `$:point.label`, `$:row.invoice_id` directly. The merge is shallow over the existing DataRef root — siblings keep seeing form state.
+One evaluator, `ComponentRenderer`, at render time, against the current DataRef — parents never pre-evaluate a child's YAML. If a click-handler needs the clicked subject visible to children, the parent publishes the subject into the DataRef instead: `force_directed` node click merges `{ node: <clonedNode> }`, `scatter` point click merges `{ point: <clonedPoint> }`, `table` row click / `row_actions` merges `{ row: <clonedRow> }`. Children in the opened subtree read `$:node.type`, `$:point.label`, `$:row.invoice_id` directly. The merge is shallow over the existing DataRef root — siblings keep seeing form state. The **`open` action** likewise publishes its `subject:` param before activating the modal — under the `row` key when the subject carries `_tf_subjectKey: 'row'` (table-origin / the chat `open_ui_modal` tool), else under `subject` — so a Button-open or a chat-opened modal body reads `$: row.<field>` / `$: subject.<field>`.
 
 **Which leaves can read a published subject (no `data:` block)** — only DataRef-aware leaves: `detail_list` ✅ (the canonical label→value record for a subject; no-`data:` mode reads each `fields[].field` from DataRef — use instead of stacked read-only `text_input`s), `text_input`/`textarea` ✅ (reads `field` from DataRef, `read_only: true` for display cells, `format:` still runs), `markdown` ✅ (no-`data:` mode reads `field` from DataRef, renders its own empty state when blank), `tag_list` ✅ (reads `field` from DataRef, a string-array field renders one chip per item, `empty_text` for zero). `metrics` ❌ — reads only via its own `data:` block (`useBoundData`), no DataRef fallback, renders `<EmptyState>` against a published subject; use `detail_list` instead.
 
@@ -384,7 +404,7 @@ A composite "Overview tab" (field record + summary) is built from `detail_list` 
 
 Click-opens-a-component contracts (`config.on_node_click.open`, `config.on_point_click.open`, table `detail_modal`, any future `open:`) take a **string id only** — the `id:` of an id-registered component (a `modal`) mounted anywhere in the same view.
 
-**"Sibling" is about the id registry, not the DOM.** `open:` resolves against the page-level id registry (the nearest `DataRefProvider`), NOT literal tree siblings — and a `modal` is React-portaled, so its position in the layout is irrelevant as long as it's mounted. Practical rules: place each modal **inside the panel/card that opens it** (a tab's panel, the card holding the trigger); it renders out of flow, so it does NOT count as an in-flow layout child. You therefore never need to **hoist modals up to the root** or **wrap the layout in a `layout_column` to make them "siblings"** — that root wrapper is a redundant singleton and collapses a fill child (e.g. a root `tabs`). When the root would be a `tabs`, keep `tabs` as the single root node and nest each modal in its triggering panel.
+**"Sibling" is about the id registry, not the DOM.** `open:` resolves against the page-level id registry (the nearest `DataRefProvider`), NOT literal tree siblings — and a `modal` is React-portaled, so its position in the layout is irrelevant as long as it's mounted. **Declare modals in the top-level `default_ui.modals` array** (a sibling of `default_ui.layout`, keyed by `id:`) — they mount page-level in the same registry, so any trigger opens one by id and one def is reusable from many sites (see `ui-modal`). You therefore never **wrap the layout in a `layout_column` to make a modal a "sibling"** — that wrapper is a redundant singleton (a modal isn't in-flow) that `check_ui`/`edit_ui` flag; keep a root `tabs` as the single root node. Nesting a modal inside the layout tree still works but is **deprecated** (`edit_ui` warns) — move it to `default_ui.modals`.
 
 ```yaml
 - component: force_directed
