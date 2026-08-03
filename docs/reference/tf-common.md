@@ -147,7 +147,7 @@ Every `on_state` handler receives the same row dict:
 
 ### NOTIFY channels
 
-There is **one** wake channel for agent dispatch: `tf_data_changed`. It is emitted by the `factory_data` NOTIFY trigger on every write, with a JSON payload that includes `factory_name`. tf core issues a single global `LISTEN tf_data_changed` and treats any own-factory fire purely as an **advisory "poll now" wake** — it never delivers or routes work, and the only payload field core consults is `factory_name` (collection/state for the actual work come from the poll query, not the payload).
+There is **one** wake channel for agent dispatch: `tf_data_changed`. The `factory_data` NOTIFY trigger emits it on every write, with a JSON payload that includes `factory_name`. tf core issues a single global `LISTEN tf_data_changed` and treats any own-factory fire purely as an **advisory "poll now" wake** — it never delivers or routes work, and the only payload field core consults is `factory_name` (collection/state for the actual work come from the poll query, not the payload).
 
 No per-state channel, no client-side hashing (as above) — concretely, plaintext `{factory}.{collection}.{state}` channels and `tf_state_<md5(...)>` channels are not emitted and not subscribed.
 
@@ -173,11 +173,11 @@ No per-state channel, no client-side hashing (as above) — concretely, plaintex
 }
 ```
 
-`_size_hint` is `'large'` when `octet_length(NEW.value::text) > 6000`. Consumers seeing `'large'` should NOT expect the row body inline — fetch via `GET /api/factories/:factory/data/:collection?since=<ts>` and reconcile; `'small'` just deprioritises that fetch.
+`_size_hint` is `'large'` when `octet_length(NEW.value::text) > 6000`. Consumers seeing `'large'` should NOT expect the row body inline — fetch via `GET /api/factories/:factory/data/:collection?since=<ts>` and reconcile; `'small'` deprioritises that fetch.
 
 Both channels share the same payload shape. Factory authors never deal with channels directly — `tf.on_state` handles the `LISTEN`/poll wiring for you.
 
-**Naming hygiene**: factory and collection names are validated `^[a-z][a-z0-9_-]{0,29}$` at create time (URL/dataRef/log-line/chat-tool sanity). **At runtime, tf additionally validates every collection AND state identifier** — the args to `tf.collection(name)` / `tf.on_state(collection, state)` and every `state=` / `.state(...)` value — against `^[a-z0-9_]+$` (≤40 chars), raising `ValueError` on the first offending call (note: a **hyphen** passes the create-time check but fails here, as do capitals and spaces). factory.yml carries the Title-Case `"Collection: State"` **display label**; agent code and UI bindings use the lowercase **runtime slug** (`"Email: Sent"` → `tf.on_state('email', 'sent')`, `tf.collection('email')`, `state='sent'`). Mapping rule + worked example: see factory-yaml. `check_python` flags Title-Case/spaced string literals in these positions before deploy.
+**Naming hygiene**: factory and collection names are validated `^[a-z][a-z0-9_-]{0,29}$` at create time (URL/dataRef/log-line/chat-tool sanity). **At runtime, tf also validates every collection AND state identifier** — the args to `tf.collection(name)` / `tf.on_state(collection, state)` and every `state=` / `.state(...)` value — against `^[a-z0-9_]+$` (≤40 chars), raising `ValueError` on the first offending call (note: a **hyphen** passes the create-time check but fails here, as do capitals and spaces). factory.yml carries the Title-Case `"Collection: State"` **display label**; agent code and UI bindings use the lowercase **runtime slug** (`"Email: Sent"` → `tf.on_state('email', 'sent')`, `tf.collection('email')`, `state='sent'`). Mapping rule + worked example: see factory-yaml. `check_python` flags Title-Case/spaced string literals in these positions before deploy.
 
 There is no message-bus primitive — pure aggregation/summarisation is a scheduled recompute (`tf.on_schedule`) overwriting a fixed-key stats row, never re-dispatch on an unchanged row. **One handler per `(collection, state)`** — a second registration emits a loud `[WARN]` (strike accounting is per-row, so two handlers would silently duplicate-execute the succeeding one).
 

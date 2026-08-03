@@ -1,7 +1,7 @@
 # ui-code_editor
 
 ## Purpose
-Multiline code editor (Monaco) with syntax highlighting, git diff markers, and serialization support for Python, YAML, JSON, or markdown.
+Multiline code editor (Monaco) with syntax highlighting, git diff markers, and serialization for Python, YAML, JSON, or markdown.
 
 ## When to use / when NOT
 **Use:** Scripts, config blocks, structured text with syntax highlighting and git diff.
@@ -20,8 +20,13 @@ Multiline code editor (Monaco) with syntax highlighting, git diff markers, and s
     font_size: 13
     diff_source:                  # optional; omit for no diff
       kind: factory_action_head
-      action_field: node.data.id  # resolves actionId for HEAD endpoint
+      action_field: data.data.id  # resolves actionId for HEAD endpoint
 ```
+
+> The doubled `data.data.` above is not a typo: the outer `data` is the clicked
+> subject (uniform across every leaf — `ui-common` § `data`), the inner one is
+> that node's own `data` payload. The leaf-specific spelling `node.data.id`
+> still resolves and is **deprecated** (`check_ui` warns).
 
 ## Config keys
 | Key | Type | Default | Meaning |
@@ -52,18 +57,18 @@ Multiline code editor (Monaco) with syntax highlighting, git diff markers, and s
 ```yaml
 - component: code_editor
   config:
-    field: node.data.code
+    field: data.data.code
     label: Python Script
     language: python
     read_only: false
     diff_source:
       kind: factory_action_head
-      action_field: node.data.id
+      action_field: data.data.id
 ```
 
 ## Gotchas
 - **Diff always-on when configured.** No toggle button; `diff_source` alone enables passive inline markers. Removes complexity vs. the previous toggle-based approach.
 - **Non-git factories degrade silently.** If git HEAD endpoint fails or factory isn't git-backed, no decorations or badge appear; no error thrown. Safe for shared YAML across git and non-git installs.
-- **Single-pane editor.** Monaco's `DiffEditor` (two-pane split) is not used. The buffer is source of truth; HEAD is read-only reference shown as decorations.
+- **Single-pane editor.** The editor does not use Monaco's `DiffEditor` (two-pane split). The buffer is source of truth; HEAD is read-only reference shown as decorations.
 - **Hover per instance.** Decoration hover messages are scoped to the specific editor instance (registered via `hoverMessage`, not global `registerHoverProvider`).
-- **Gutter CSS global.** Diff marker classes (`tf-code-diff-{added,modified,removed}`) are defined globally in `styles/globals.css` because Monaco renders the gutter in a portal.
+- **Gutter CSS global.** Diff marker classes (`tf-code-diff-{added,modified,removed}`) live globally in `styles/globals.css` because Monaco renders the gutter in a portal.

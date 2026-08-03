@@ -40,7 +40,7 @@ tf.add_mcp_tool('tool_name', 'Description for the LLM') \
 
 ## Tool annotations (`.with_annotations`)
 
-`.with_annotations({...})` attaches the standard MCP `ToolAnnotations` object to the tool. It is optional — but **declare it on every externally exposed tool**: external clients (claude.ai) use annotations to bucket tools, and an unannotated tool lands in a junk "Other tools" bucket. The dict is passed through verbatim to MCP clients (no validation in tf; use spec keys only).
+`.with_annotations({...})` attaches the standard MCP `ToolAnnotations` object to the tool. It is optional — but **declare it on every externally exposed tool**: external clients (claude.ai) use annotations to bucket tools, and an unannotated tool lands in a junk "Other tools" bucket. tf forwards the dict to MCP clients verbatim (no validation; use spec keys only).
 
 | Key | Type | MCP default if absent | Meaning |
 |---|---|---|---|
