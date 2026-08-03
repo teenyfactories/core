@@ -2,7 +2,7 @@
 
 ## Purpose
 
-OneDrive/Drive-like file browser over a factory **volume**. Provides filesystem browsing (not data subscription) with view modes, sorting, upload/download, and folder navigation.
+OneDrive/Drive-like file browser over a factory **volume**. Browses the filesystem (not data subscription) with view modes, sorting, upload/download, and folder navigation.
 
 ## When to use / when NOT
 
@@ -73,5 +73,5 @@ children:
 - **Self-contained:** emits no actions; requires no sibling wiring.
 - **Path confinement:** backend enforces all traversal safety and volume verification.
 - **K8s:** for S3 volumes, orchestrator must hold bucket credentials.
-- **Capabilities:** view toggle (grid/list/details), client-side sort (name/type/size/mtime), breadcrumb navigation, double-click folders, drag-drop/button upload, per-entry download/delete, New Folder. Folders always sort above files; long names truncate with ellipsis. Fills parent, survives window resize. Loading (300 ms–deferred), empty, and error states handled via shared leaves.
+- **Capabilities:** view toggle (grid/list/details), client-side sort (name/type/size/mtime), breadcrumb navigation, double-click folders, drag-drop/button upload, per-entry download/delete, New Folder. Folders always sort above files; long names truncate with ellipsis. Fills parent, survives window resize. Shared leaves handle loading (300 ms–deferred), empty, and error states.
 

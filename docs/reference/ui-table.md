@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Flagship data-display component: sortable, paginated table over a factory_data collection, with per-column rendering, row actions, and a row-click detail view (sibling `modal` id-ref, or legacy inline `detail_modal`).
+Flagship data-display component: sortable, paginated table over a factory_data collection, with per-column rendering, row actions, and a row-click detail view (sibling `modal` id-ref, or legacy inline `detail_modal`). Row click is the universal `on_item_click:` handler.
 
 ## When to use / when NOT
 
@@ -33,15 +33,25 @@ config:
   row_actions:
     - { icon: check, action: save_data_item, collection: review_queue, key: "$: invoice_id", state: approved }
     - { icon: eye, action: open, id: invoice_detail_modal }
-on_row_click:            # TOP-LEVEL on the component — a SIBLING of `config:`, NOT inside it
+on_item_click:           # TOP-LEVEL on the component — a SIBLING of `config:`, NOT inside it
   open: invoice_detail_modal
 ```
 
-> **Placement:** `on_row_click` is read at the component top level (`component.on_row_click`), a
+> **Naming:** `on_item_click` is the universal handler for "the user clicked one of the things
+> this component renders" — a row here, a point on a `scatter`. One spelling across leaves, so a
+> handler reads the same wherever it's copied. The table-only `on_row_click:` still fires but is
+> **deprecated** (`check_ui` warns).
+>
+> **Placement:** `on_item_click` is read at the component top level (`component.on_item_click`), a
 > sibling of `data:` / `config:` — **not** a key inside `config:`. Nesting it under `config:`
-> disables row-click at runtime (rows just aren't clickable). `check_ui` rejects this
+> disables row-click at runtime (rows aren't clickable). `check_ui` rejects this
 > (`misplaced-under-config` error — see `ui-common`), so `edit_ui` refuses the save. `row_actions`
-> DOES live inside `config:`; `on_row_click` does not — don't mirror its placement.
+> DOES live inside `config:`; `on_item_click` does not — don't mirror its placement.
+>
+> `row_actions` is a config list, not an `on_<event>` handler, which is why the two differ.
+> A **top-level** `row_actions:` still renders but is **deprecated** — `check_ui` emits a
+> warning and it will be removed in a future version. Author it inside `config:`, beside
+> `columns:`, as shown above.
 
 ## Config keys
 
@@ -56,19 +66,20 @@ on_row_click:            # TOP-LEVEL on the component — a SIBLING of `config:`
 | `columns[].sortable: false` | Excludes column from header-click sort — for columns lacking a backing field. |
 | `columns[].link_field` | Renders cell as link, field's value as `href`. |
 | `columns[].format` | `number` \| `percentage` \| `relative_time` \| `currency`. |
-| `columns[].value: "$: <expr>"` | JSONata over `{ row }`, replaces `field:` for display; `field:` still needed for sort/name. Builtins incl. `$uppercase`, `$string`, `&`, ternary. |
+| `columns[].value: "$: <expr>"` | JSONata over `{ row }`, replaces `field:` for display; `field:` still needed for sort/name. Builtins incl. `$uppercase`, `$string`, `&`, ternary. This `row` is the **cell-render** context and is NOT the deprecated click-subject prefix — keep it. |
 | `columns[].type: tags` | Cell → pill chip(s) — array → chip/item, scalar → single chip. |
 | `columns[].tagColor: primary` | Only with `type: tags`; solid fill, white text. Omit for neutral; reserve for status pills. |
 | `sentiment_field` | String, default `'sentiment'`. Data key for tracking active row-action index (internal). |
 | `row_actions[]` | Flat sibling params (`action:`, `collection:`, `key:`, `state:`/`id:`, `icon:`, `label:`), canonical action enum — no `args:`/`actions:` wrapper. |
-| `on_row_click.open` | Id-ref (string/`$:` JSONata → string) to sibling `modal` — recommended shape. |
-| `on_row_click.action` | Dispatch a canonical action on row click (e.g. `save_data_item`, `delete_data_item`). |
-| `on_row_click.detail_modal` | Legacy inline shape (below), still supported. |
+| `on_item_click.open` | Id-ref (string/`$:` JSONata → string) to sibling `modal` — recommended shape. |
+| `on_item_click.action` | Dispatch a canonical action on row click (e.g. `save_data_item`, `delete_data_item`). |
+| `on_item_click.detail_modal` | Legacy inline shape (below), still supported. |
+| `on_row_click` | **Deprecated** alias of `on_item_click` — still fires, `check_ui` warns. |
 
 ## Data & events
 
-- **Sort — server-side only** (Table paginates; client-side sort would just reorder the loaded page). `sort_field`/`sort_dir` set default order, forwarded as query params (`ORDER BY` over all rows). Headers are clickable — click sorts by column, click again toggles `asc`⇄`desc`; active column shows ▲/▼. Meta-field map: `_updated_at`→`updated_at`, `_created_at`→`created_at`, `_state`→`state`, `_key`→`key`; else → `value->>'<field>'`. Omit → default `updated_at DESC`.
-- **Row click** publishes `{ row: <clonedRow> }` onto DataRef so descendants resolve `$:row.field`. `on_row_click.open` / `row_actions[*].action: open` take a string id only (id-ref pattern; `ui-common`).
+- **Sort — server-side only** (Table paginates; client-side sort would only reorder the loaded page). `sort_field`/`sort_dir` set default order, forwarded as query params (`ORDER BY` over all rows). Headers are clickable — click sorts by column, click again toggles `asc`⇄`desc`; active column shows ▲/▼. Meta-field map: `_updated_at`→`updated_at`, `_created_at`→`created_at`, `_state`→`state`, `_key`→`key`; else → `value->>'<field>'`. Omit → default `updated_at DESC`.
+- **Row click** publishes the clicked row onto DataRef so descendants resolve `$: data.field` — the same prefix a card, scatter or force-graph click publishes under, so a modal body doesn't care which leaf opened it. The legacy table-only spelling `$: row.field` still works and is deprecated (`check_ui` warns). Inside `on_item_click`'s own params, `$: data.field` and bare `$: field` both resolve. `on_item_click.open` / `row_actions[*].action: open` take a string id only (id-ref pattern; `ui-common`).
 - **`detail_modal` (legacy).** Portal-mounted, scoped to the clicked row; body + footer share one hoisted DataRefProvider — footer Save auto-sees body edits, no `data:`/`data_field:` needed (`key: '$: _key'`; `_key`/`_state`/`_updated_at` are Table-injected). Sibling id-ref is newer/recommended; `detail_modal:` predates it, still supported. **Known debt:** footer Save's snapshot leaks those underscore keys into saved `data` JSONB (display unaffected, re-flattened next read) — filed against composable-ui-architect debt register.
 - **`sections:`** >1 entry → tab strip (`title` = label, footer visible across tabs); 1 entry → inline. Sizing `config: { width, max_width, max_height, min_height }` (defaults `800px`/`90vw`/`85vh`/unset) — set `min_height` if tab heights vary, else the modal collapses/jumps.
 - **Field asymmetry**: `markdown`/`table` read `field` at section top level; everything else reads it from `config:`. `table.field` needs array of **objects**; array of **strings** needs `tag_list`. Detail modal table sections also accept `columns: [{field, label}]` to control column headers.
@@ -79,7 +90,7 @@ on_row_click:            # TOP-LEVEL on the component — a SIBLING of `config:`
 Tabbed `detail_modal`, destructive footer:
 
 ```yaml
-on_row_click:
+on_item_click:
   detail_modal:
     title: '$: filename'
     config: { width: 760px, max_height: 80vh, min_height: 480px }
@@ -99,7 +110,7 @@ The goal is **CRUD-completeness for collections users should act on**: if a coll
 
 ### Table → sibling TABBED detail modal (a good CRUD mechanism; recommended over the legacy `detail_modal:` above)
 
-Declare the record view as a SIBLING `modal` with an `id:`; the table's `on_row_click: { open: <id> }` publishes the clicked row onto the DataRef, so the modal's descendants resolve `$: row.<field>`. A record modal is a `tabs` block (tab/panel pairs), not a flat `detail_list`, and its `footer` carries the CRUD actions (edit-save, delete):
+Declare the record view as a SIBLING `modal` with an `id:`; the table's `on_item_click: { open: <id> }` publishes the clicked row onto the DataRef, so the modal's descendants resolve `$: data.<field>`. (The table-only spelling `$: row.<field>` still resolves and is **deprecated** — `check_ui` warns. See `ui-common` § `data`.) A record modal is a `tabs` block (tab/panel pairs), not a flat `detail_list`, and its `footer` carries the CRUD actions (edit-save, delete):
 
 ```yaml
 # The record modal below is React-portaled (opened by id) — it is NOT a flex
@@ -121,11 +132,11 @@ Declare the record view as a SIBLING `modal` with an `id:`; the table's `on_row_
           - { field: name, label: Client }
           - { field: industry, label: Industry }
           - { field: status, label: Status, type: tags }
-      on_row_click: { open: client_modal }          # opens the sibling modal below
+      on_item_click: { open: client_modal }         # opens the sibling modal below
 
     - component: modal
       id: client_modal
-      title: '$: row.name'
+      title: '$: data.name'                       # `data.` = whatever was clicked
       config: { width: 820px, max_height: 85vh }
       body:
         - component: tabs
@@ -135,9 +146,9 @@ Declare the record view as a SIBLING `modal` with an `id:`; the table's `on_row_
               slot: panel
               config:
                 fields:
-                  - { field: row.name, label: Name }
-                  - { field: row.industry, label: Industry }
-                  - { field: row.owner, label: Account owner }
+                  - { field: data.name, label: Name }
+                  - { field: data.industry, label: Industry }
+                  - { field: data.owner, label: Account owner }
             - { component: tab, slot: tab, title: Edit, config: { icon: pen } }
             - component: layout_column
               slot: panel
@@ -158,15 +169,15 @@ Declare the record view as a SIBLING `modal` with an `id:`; the table's `on_row_
       footer:
         - component: button
           config: { label: Delete, variant: danger, icon: trash }
-          on_click: { action: delete_data_item, collection: client, key: '$: row._key', then_close: true }
+          on_click: { action: delete_data_item, collection: client, key: '$: data._key', then_close: true }
         - component: button
           config: { label: Save, variant: primary, icon: check }
-          on_click: { action: save_data_item, collection: client, key: '$: row._key', then_close: true }
+          on_click: { action: save_data_item, collection: client, key: '$: data._key', then_close: true }
 ```
 
 - **Tabs shape:** `tabs.children` is an alternating sequence of `{ component: tab, slot: tab, title: … }` markers and their panel node (`slot: panel`). One record modal, several perspectives (overview / edit form / related records) — this is the "rich tabbed modal", not multiple flat modals.
-- **Edit:** the Edit tab's inputs bind form fields with `field:`; the footer **Save** (a Button/Modal-footer with `save_data_item` and no explicit `data`) auto-attaches the DataRef snapshot, writing the edited fields back to `key: '$: row._key'` (the clicked row).
-- **Delete:** `delete_data_item` on `key: '$: row._key'` + `then_close: true`.
+- **Edit:** the Edit tab's inputs bind form fields with `field:`; the footer **Save** (a Button/Modal-footer with `save_data_item` and no explicit `data`) auto-attaches the DataRef snapshot, writing the edited fields back to `key: '$: data._key'` (the clicked row).
+- **Delete:** `delete_data_item` on `key: '$: data._key'` + `then_close: true`.
 
 ### Add NEW item — every creatable collection needs a create path
 

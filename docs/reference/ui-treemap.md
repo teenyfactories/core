@@ -6,7 +6,7 @@ Hierarchical treemap visualization via Recharts. Displays nested rectangles size
 
 ## When to use / when NOT
 
-**Use** when showing hierarchical proportional data (e.g. portfolio allocation, resource breakdown, org chart metrics).
+**Use** to show hierarchical proportional data (e.g. portfolio allocation, resource breakdown, org chart metrics).
 
 **Not** for time-series (use `line_chart`), categorical comparisons (use `bar_chart`), or 2D scatter relationships (use `scatter`).
 

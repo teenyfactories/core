@@ -4,7 +4,7 @@
 Renders a collection as state-grouped kanban columns: each column represents one state, each card is a factory_data row. Dragging a card between columns writes the row's new state.
 
 **When to use / when NOT**  
-Use when you need to visualize and manually manage rows by state (workflows, task boards, pipelines). NOT for read-only state visualization; NOT when state changes must be guarded or restricted.
+Use to visualize and manually manage rows by state (workflows, task boards, pipelines). NOT for read-only state visualization; NOT when state changes must be guarded or restricted.
 
 **YAML shape**
 ```yaml
@@ -24,7 +24,7 @@ children:
   - `label` (required): Column header text.
   - `color` (optional): Hex color or token for column header top border.
   - `empty_text` (optional): Message shown when column has no cards.
-- `children` (required): Exactly one child, `component: card`. Card leaves read fields flat (`field: title`, not `field: row.title`). Row metadata exposed as `_key`, `_state`, `_updated_at`.
+- `children` (required): Exactly one child, `component: card`. Card leaves read fields flat (`field: title`, never `field: row.title` — `row` is the table's own wrapper name and is undefined here). Row metadata exposed as `_key`, `_state`, `_updated_at`. In a card's `on_click` params, `$: data.title` also resolves — `data` is the uniform name for the clicked subject on every leaf (`ui-common` § `data`), so a handler written with it copies unchanged to a table row click.
 
 **Data & events**
 - Fetches ALL rows in collection, groups by state; no state filter in `data:`.

@@ -35,13 +35,13 @@ config:
 | `data_field` | string | Yes | Field within `row.value` holding the array of chart points. |
 | `x_field` | string | Yes | Field name for x-axis values. |
 | `y_field` | string | Yes | Field name for y-axis values. |
-| `series_field` | string | No | Field to group into separate lines. |
+| `series_field` | string | No | Field to group into separate lines. Setting it also renders a legend naming each line — there is no `show_legend` key here, and a single-line chart never gets one. |
 | `x_label` | string | No | X-axis label. |
 | `y_label` | string | No | Y-axis label. |
 
 ## Data & events
 
-Reads from `data.collection` at `data.state`. With `latest: true`, fetches the single latest row; the row must contain `data_field` (the array of chart points). No events emitted; chart is read-only.
+Reads from `data.collection` at `data.state`. With `latest: true`, fetches the single latest row; the row must contain `data_field` (the array of chart points). Emits no events; chart is read-only.
 
 ## Example
 

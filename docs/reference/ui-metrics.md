@@ -1,7 +1,7 @@
 # ui-metrics
 
 ## Purpose
-Display a set of labeled KPIs or summary statistics in a grid layout, formatted as numbers, percentages, currency, or durations. Each metric fetches its value from a single field in the bound `data:` collection/state.
+Display labeled KPIs or summary statistics in a grid layout, formatted as numbers, percentages, currency, or durations. Each metric fetches its value from a single field in the bound `data:` collection/state.
 
 ## When to use / when NOT
 **Use:** dashboard headers, summary panels, KPI dashboards.

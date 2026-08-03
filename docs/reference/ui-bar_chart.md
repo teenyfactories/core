@@ -43,13 +43,13 @@ config:
 | `data_field` | string | Field on row.data containing array to iterate |
 | `x_field` | string | Category field for x-axis grouping |
 | `y_field` | string | Numeric field for bar height |
-| `series_field` | string | Field defining series (optional; omit for single series) |
+| `series_field` | string | Field defining series (optional; omit for single series). Setting it also renders a legend naming each series — there is no `show_legend` key here, and a single-series chart never gets one. |
 | `stacked` | boolean | `false` (default, grouped) or `true` (stacked layout) |
 | `x_label`, `y_label` | string | Axis labels |
 | `scale.scheme` | string | Color palette (default: `theme_categorical`); do NOT hardcode bar colours |
 
 ## Data & events
-Data flows from `factory_data` row, keyed by collection/state/key. Bar colours are derived from `scale.scheme` and optional `color_map` (factory-owned, resolved via scale resolver).
+Data flows from `factory_data` row, keyed by collection/state/key. Bar colours derive from `scale.scheme` and optional `color_map` (factory-owned, resolved via scale resolver).
 
 ## Example
 **Multi-series, grouped:**
@@ -73,6 +73,6 @@ config:
 ```
 
 ## Gotchas
-**Tooltip filtering:** Hover tooltips list one row per series, but series with zero or null/missing value at the hovered x are hidden automatically. If all series are zero/empty at a given x, no tooltip renders. This is unconditional — no config key toggles it.
+**Tooltip filtering:** Hover tooltips list one row per series, but the chart automatically hides series with zero or null/missing value at the hovered x. If all series are zero/empty at a given x, no tooltip renders. This is unconditional — no config key toggles it.
 
 **Bar colours:** Never hardcode in factory.yml. Use `scale.scheme` (default `theme_categorical`); pass `color_map` for fixed mappings through the scale resolver.

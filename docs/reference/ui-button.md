@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A clickable button that triggers actions (state transitions, data mutations, page navigation). Buttons are the primary interactive affordance in dashboards — they dispatch `on_click` handlers to modify data, close modals, or signal custom events.
+A clickable button that triggers actions (state transitions, data mutations, page navigation). Buttons are the primary interactive control in dashboards — they dispatch `on_click` handlers to modify data, close modals, or signal custom events.
 
 ## When to use / when NOT
 
@@ -38,7 +38,7 @@ on_click:
 
 ## Data & events
 
-**`on_click` — button pressed.** Fires a single action or array of actions (multi-dispatch). Action semantics (canonical actions, params, write semantics) are detailed in [Actions](ui-common.md#actions). Most common: `save_data_item` (state transition + optional data patch) and `custom:*` (page-specific handler).
+**`on_click` — button pressed.** Fires a single action or array of actions (multi-dispatch). [Actions](ui-common.md#actions) details action semantics (canonical actions, params, write semantics). Most common: `save_data_item` (state transition + optional data patch) and `custom:*` (page-specific handler).
 
 Buttons automatically resolve `$:` JSONata expressions in action params against the live DataRef snapshot (if the button is nested under a `data:` binding) or the current page context.
 

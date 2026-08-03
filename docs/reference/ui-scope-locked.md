@@ -14,8 +14,8 @@ component: chat_panel
 
 ## node_logs_panel
 
-Live container-log stream. Used by the factory editor.
+Live container-log stream. The factory editor uses it.
 
 ## node_controls_panel
 
-Service start/stop/restart panel. Used by the factory editor.
+Service start/stop/restart panel. The factory editor uses it.
