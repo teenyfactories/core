@@ -2,7 +2,7 @@
 
 The `factory.yml` at the root of each factory is the single source of truth for its
 structure: the **states** its data moves through, the **agents** that run, and the
-**volumes** they attach. This document is the authoritative schema — it is what
+**volumes** they attach. This document is the authoritative schema — what
 `check_factory_yaml` validates against.
 
 For Python authoring (`tf.on_state`, `tf.collection`, `tf.llm`, the agent main loop,
@@ -182,7 +182,7 @@ agents:
 
 `input_states` / `output_states` are **wiring metadata** — they document the
 topology and drive the editor graph. The runtime subscription is whatever the
-agent's `.py` actually calls `tf.on_state(...)` on; keep the two in sync.
+agent's `.py` calls `tf.on_state(...)` on; keep the two in sync.
 
 There is no agents-vs-workers distinction — every factory component is an agent.
 Some call LLMs (`tf.llm`), some don't; that's a property of the code, not a

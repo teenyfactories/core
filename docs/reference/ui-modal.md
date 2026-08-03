@@ -14,7 +14,7 @@ A surface that opens and closes over the main page, commonly for editing detail 
 
 A modal is **React-portaled and opened by `id:`** — it resolves against the page-level id registry, not literal DOM siblings, so its position in the layout is irrelevant as long as it's **mounted** when its trigger fires. It renders **out of flow**, so it is NOT an in-flow layout child.
 
-**Declare modals in the top-level `default_ui.modals` array** — a sibling of `default_ui.layout`, keyed by `id:`. They mount page-level (inside the same data context as the layout), so ANY trigger — a button, a table `on_row_click`, or the chat `open_ui_modal` tool — opens one by id, and ONE modal def is reusable from many trigger sites.
+**Declare modals in the top-level `default_ui.modals` array** — a sibling of `default_ui.layout`, keyed by `id:`. They mount page-level (inside the same data context as the layout), so ANY trigger — a button, a table `on_item_click`, or the chat `open_ui_modal` tool — opens one by id, and ONE modal def is reusable from many trigger sites.
 
 ```yaml
 default_ui:
@@ -24,11 +24,11 @@ default_ui:
     children:
       - component: table
         data: { collection: client, state: active }
-        on_row_click: { open: client_modal }     # opens the modal below by id
+        on_item_click: { open: client_modal }    # opens the modal below by id
   modals:
     - component: modal
       id: client_modal
-      title: '$: row.name'
+      title: '$: data.name'                  # `data` = the clicked subject, any leaf
       body: [ ... ]
     - component: modal
       id: new_client_modal
@@ -79,7 +79,7 @@ children:
     children: [...]
 ```
 
-Slot-aware: children may carry `slot: header|body|footer` (default `body`; legacy form only). Named-key form (`body:`, `footer:`) is preferred.
+Slot-aware: children may carry `slot: header|body|footer` (default `body`; legacy form only). Prefer the named-key form (`body:`, `footer:`).
 
 ## Config keys
 
@@ -97,7 +97,7 @@ Slot-aware: children may carry `slot: header|body|footer` (default `body`; legac
 
 **Built-in actions:**
 - `{ action: close }` — closes the modal.
-- **Persist a record — `save_data_item` / `delete_data_item`** (with `then_close: true`) — a footer that writes a factory_data row (edit an existing record, `key: '$: row._key'`; or create a new one, `key: $uuid`). This is the canonical CRUD footer for a data-backed modal. A Button/Modal-footer with `save_data_item` and no explicit `data` auto-attaches the DataRef snapshot, so the body's form fields are written back. See the full **table → tabbed detail/edit modal → footer CRUD → add-item** pattern in `read_docs{ doc: "ui-table" }` (§ CRUD).
+- **Persist a record — `save_data_item` / `delete_data_item`** (with `then_close: true`) — a footer that writes a factory_data row (edit an existing record, `key: '$: data._key'`, where `data` is whatever was clicked to open the modal — see `ui-common` § `data`; or create a new one, `key: $uuid`). This is the canonical CRUD footer for a data-backed modal. A Button/Modal-footer with `save_data_item` and no explicit `data` auto-attaches the DataRef snapshot, so it writes back the body's form fields. See the full **table → tabbed detail/edit modal → footer CRUD → add-item** pattern in `read_docs{ doc: "ui-table" }` (§ CRUD).
 - `{ action: custom:save, then_close: true }` — bubbles to the HOST PAGE's `onAction` (a bespoke-page hook). Factory `default_ui` has no such host handler, so `custom:*` is a NO-OP there — use `save_data_item` to persist. (See `ui-common` for open/close action detail.)
 
 **Keyboard shortcuts (zero config):**
@@ -124,7 +124,7 @@ footer:
         on_click: { action: close }
       - component: button
         config: { label: Save, variant: primary }
-        on_click: { action: save_data_item, collection: client, key: '$: row._key', then_close: true }
+        on_click: { action: save_data_item, collection: client, key: '$: data._key', then_close: true }
 ```
 
 For a tabbed record modal opened from a table row (overview / edit / related records), and the add-new-item form-modal pattern, see `read_docs{ doc: "ui-table" }` § CRUD — it shows the composite end to end.

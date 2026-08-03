@@ -25,7 +25,7 @@ config:
     claimant: { shape: circle, radius: 18, fill: "#ef4444", icon: user }
     vendor:   { shape: rounded_rect, auto_width: true, fill: "#f59e0b", icon: wrench }
   on_node_click:
-    open: "$: node.type = 'claimant' ? 'claimant_modal' : 'vendor_modal'"
+    open: "$: data.type = 'claimant' ? 'claimant_modal' : 'vendor_modal'"
   empty_message: "No data available"
   charge_strength: -2000
 ```
@@ -36,11 +36,11 @@ config:
 
 Per node: `id` (required), `type` (selects `node_types`), `label` (display; falls back to `data.name`/`id`), optional `data.fill` (hex override). Per link: `source`/`target` node ids, optional `label`.
 
-Click handlers activate modals by string `id` only; modal descendants read `node.<field>`.
+Click handlers activate modals by string `id` only; modal descendants read `data.<field>` — the uniform prefix for the clicked subject on every leaf (`ui-common` § `data`). The graph-specific spelling `node.<field>` still resolves and is **deprecated** (`check_ui` warns).
 
 ## Config keys
 
-**Node rendering:** `node_types` (map type → shape/radius/fill/stroke/icon/label_position/auto_width); shapes: `circle`, `rounded_rect`, `rect`, `none`. `on_node_click: {open: string_modal_id}`. Fills are raw hex (factory-owned category palette).
+**Node rendering:** `node_types` (map type → shape/radius/fill/stroke/icon/label_position/auto_width); shapes: `circle`, `rounded_rect`, `rect`, `none`. `on_node_click: {open: string_modal_id}` — top-level on the component. This leaf keeps its own click keys (`on_node_click` / `on_edge_click` / `on_background_click`) rather than the universal `on_item_click`, because a graph has three distinct click targets and "the item" would be ambiguous. Fills are raw hex (factory-owned category palette).
 
 **Physics:** `charge_strength` (default `-2000`), `charge_exponent` (default `1.5`), `charge_max_distance` (default `Infinity`; repulsion-only cutoff).
 

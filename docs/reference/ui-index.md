@@ -4,6 +4,7 @@ The composable UI system builds factory dashboards and editor pages from a decla
 
 - **ui-common** — shared vocabulary: layout, data binding, actions, styling, and validation rules common to every component.
 - **ui-table** — sortable, paginated table over a data collection, with per-column formatting and row actions.
+- **ui-editable_grid** — spreadsheet-style editable matrix with independent row, column, and cell-storage bindings.
 - **ui-kanban** — drag-and-drop board that groups rows into columns by state.
 - **ui-metrics** — grid of labeled key metric values.
 - **ui-detail_list** — read-only label/value display of a single record.

@@ -6,7 +6,7 @@
 
 ## Decision quick-map
 
-Sortable/paginated rows → `ui-table` · rows grouped by state, drag to transition → `ui-kanban` · KPI strip → `ui-metrics` · one record's fields, read-only → `ui-detail_list` · long-form editable text → `ui-textarea` · single-line input → `ui-text_input` · one-of-many choice → `ui-select` · many-of-many / tagging → `ui-multi_select` · rich text / briefs / wiki links → `ui-markdown` · state machine / entity graph → `ui-force_directed` · two numeric variables, clusters/correlation → `ui-scatter` · categorical comparison → `ui-bar_chart` · trend over time → `ui-line_chart` · flat proportional breakdown → `ui-treemap` · dashboard skeleton, side-by-side vs stacked → `ui-layout-primitives` · framed panel → `ui-card` · focused single-entity overlay → `ui-modal` · multi-view switcher → `ui-tabs` · script/config/diff → `ui-code_editor` · folder/org-chart editing → `ui-tree_editor` · browsing factory volume files → `ui-file_explorer` · git commit flow → `ui-commit_modal` · destructive-action confirm → `ui-confirm_destructive_modal` · single action → `ui-button`, grouped actions → `ui-button_group` · status dot/tag/loading/empty/error/container health → `ui-lightweight` · inline chat or factory-editor logs/controls → `ui-scope-locked`.
+Sortable/paginated rows → `ui-table` · grid of editable cells addressed by (row-thing, column-thing) → `ui-editable_grid` · rows grouped by state, drag to transition → `ui-kanban` · KPI strip → `ui-metrics` · one record's fields, read-only → `ui-detail_list` · long-form editable text → `ui-textarea` · single-line input → `ui-text_input` · one-of-many choice → `ui-select` · many-of-many / tagging → `ui-multi_select` · rich text / briefs / wiki links → `ui-markdown` · state machine / entity graph → `ui-force_directed` · two numeric variables, clusters/correlation → `ui-scatter` · categorical comparison → `ui-bar_chart` · trend over time → `ui-line_chart` · flat proportional breakdown → `ui-treemap` · dashboard skeleton, side-by-side vs stacked → `ui-layout-primitives` · framed panel → `ui-card` · focused single-entity overlay → `ui-modal` · multi-view switcher → `ui-tabs` · script/config/diff → `ui-code_editor` · folder/org-chart editing → `ui-tree_editor` · browsing factory volume files → `ui-file_explorer` · git commit flow → `ui-commit_modal` · destructive-action confirm → `ui-confirm_destructive_modal` · single action → `ui-button`, grouped actions → `ui-button_group` · status dot/tag/loading/empty/error/container health → `ui-lightweight` · inline chat or factory-editor logs/controls → `ui-scope-locked`.
 
 ## Component catalog
 
@@ -38,7 +38,7 @@ Sortable/paginated rows → `ui-table` · rows grouped by state, drag to transit
 
 **ui-treemap** — nested rectangles sized/coloured by value, flat array only. Proportional breakdowns. No true multi-level nesting yet; not time-series or category bars.
 
-**ui-layout-primitives** — `layout_row`/`layout_column`, the only sanctioned layout primitives. Every new dashboard skeleton. The `grid` component they replaced still renders for old factories but must never be authored into new YAML.
+**ui-layout-primitives** — `layout_row`/`layout_column`, the only sanctioned layout primitives. Every new dashboard skeleton. The `grid` component they replaced still renders for old factories but you must never author it into new YAML.
 
 **ui-card** — framed panel, optional header/body/footer; body auto-infers layout axis from children. Groups content inside a dashboard. Not a page shell (use layout primitives directly).
 
@@ -49,6 +49,8 @@ Sortable/paginated rows → `ui-table` · rows grouped by state, drag to transit
 **ui-code_editor** — Monaco editor, syntax highlighting, optional git-diff gutter. Scripts/config/structured text. Not single-line strings; single-pane only, no split diff.
 
 **ui-tree_editor** — client-side hierarchy editor over a flat `parent_id`-keyed collection; add/rename/delete. Folder structures, org charts. `max_depth` is UI-only (enforce server-side too); delete cascades to descendants with no confirm step.
+
+**ui-editable_grid** — spreadsheet-style matrix with configurable data-entry rules; rows, columns, and cell storage bind independently (four storage topologies: one row per cell / per grid row / per grid column / one whole-matrix row). Timesheets, capacity, rate cards, skills matrices — anything addressed by *(row-thing, column-thing)*. Not a record list (`ui-table`), not a free-address spreadsheet, not hierarchical (axes are flat).
 
 **ui-file_explorer** — filesystem browser over a declared factory volume (list/upload/download/mkdir/delete); talks to the volume API, not `factory_data`. Requires the volume pre-declared in `factory.yml`.
 

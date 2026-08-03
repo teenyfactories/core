@@ -51,13 +51,13 @@ my_factory/
     └── enricher.py
 ```
 
-Each `agents/*.py` runs in its own container based on `ghcr.io/teenyfactories/agent:dev` — which has this library pre-installed. Single-factory mode runs each file as a `docker compose` service; multi-factory mode runs them under the orchestrator. Either way, agent code is just `import teenyfactories as tf` + handlers + main loop.
+Each `agents/*.py` runs in its own container based on `ghcr.io/teenyfactories/agent:dev` — which has this library pre-installed. Single-factory mode runs each file as a `docker compose` service; multi-factory mode runs them under the orchestrator. Either way, agent code is `import teenyfactories as tf` + handlers + main loop.
 
 Full setup, compose templates, environment variable reference: see the [core repo](https://github.com/teenyfactories/core).
 
 ## Versioning
 
-Semantic versioning; current release **1.0.0** (`pip install teenyfactories`). The version is declared in `pyproject.toml` and `teenyfactories/__version__.py` (kept in lockstep) and published to PyPI by CI on push to `main`, idempotent per version.
+Semantic versioning; current release **1.0.0** (`pip install teenyfactories`). The version is declared in `pyproject.toml` and `teenyfactories/__version__.py` (kept in lockstep); CI publishes it to PyPI on push to `main`, idempotent per version.
 
 ## License
 

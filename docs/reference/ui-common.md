@@ -16,8 +16,9 @@ data: {...}                # Optional — data binding (6 modes; see Data bindin
 filter: {...}              # Optional — row-level winnowing, object form or JSONata string
 transform: "$:..."         # Optional — JSONata expression: rows → rows
 on_click: {...}            # Event handlers, TOP-LEVEL, FLAT sibling params on `action:` (no `args:` nest, no
-on_change/on_select/...    #   `actions:` wrapper). Also on_row_click/on_node_click/on_point_click/on_search/
-on_blur: ...               #   on_submit/on_toggle. Array form: on_click: [ { action: A }, { action: B } ]
+on_change/on_select/...    #   `actions:` wrapper). Also on_item_click (a rendered item — table row, scatter
+on_blur: ...               #   point), on_node_click, on_search, on_submit, on_toggle.
+                           #   Array form: on_click: [ { action: A }, { action: B } ]
 preset: <name>             # Optional — named base config; `config:` overrides selectively
 overlays: [ { type: text|line|rect|arrow|image|point|band, ... } ]   # Optional — chart/viz annotations
 config: {...}              # Per-leaf configuration — see the leaf's own ui-<component> doc
@@ -26,6 +27,8 @@ slot:                      # Optional on a CHILD — names its slot (only inside
 style:                     # Optional — CSS-style object for THIS component's box; top-level only, never `config:`
 show_when: "$:..."         # Optional — JSONata expression; component renders only when truthy.
 ```
+
+A handful of top-level keys are **leaf-owned**, not universal — they are declared on one leaf's schema because they'd be inert everywhere else: `header_buttons:` (`card` — controls on the title's baseline, see [ui-card](ui-card.md)), `body:` / `footer:` (`modal` — the named-key alternative to slot children).
 
 **No legacy keys.** The strict gate rejects: `type:` (use `component:`), `data_collection:`/`topic_full_data:`/`topic_incremental_data:`/`inline_data:`/`update_topic:` (use `data:`), `config.style:`/`config.data:` (lift to top-level `style:`/`data:`), `Table.filter_by:`/`ForceDirected.node_filter:` (use top-level `filter:`), `chart_type:` (split into `line_chart`/`bar_chart`/`treemap`/`scatter`), `action: publish`/`store`/`apply`/`delete`/`save_and_restart` (see Actions), `{{...}}` templates and bare-jq expressions (use `$:` JSONata).
 
@@ -79,13 +82,13 @@ Avoid `limit` (ambiguous), `count` (aggregations), `pageSize` (camelCase), `trun
 
 ### Format / display
 
-`format` is canonical for **cell-level rendering**: `"number"` (locale-grouped int or 2-decimal float), `"percentage"` (`0–1` floats → `XX.X%`; >1 assumed already percent), `"relative_time"` (`"just now"`/`"5m ago"`/`"2h ago"`/`"3d ago"`), `"duration"` (`"123ms"`, Metrics). Used by `metrics`, `detail_list`, read-only `text_input`/`textarea` via shared `utils/formatValue`; `table` keeps its own cell formatter (slightly different `relative_time`/boolean handling) deliberately. New values land here first, then in `formatValue`.
+`format` is canonical for **cell-level rendering**: `"number"` (locale-grouped int or 2-decimal float), `"percentage"` (`0–1` floats → `XX.X%`; >1 assumed already percent), `"relative_time"` (`"just now"`/`"5m ago"`/`"2h ago"`/`"3d ago"`), `"duration"` (`"123ms"`, Metrics). `metrics`, `detail_list`, and read-only `text_input`/`textarea` use it via shared `utils/formatValue`; `table` keeps its own cell formatter (slightly different `relative_time`/boolean handling) deliberately. New values land here first, then in `formatValue`.
 
 ### State / behaviour flags
 
 | Prefix | Intent | Examples |
 |---|---|---|
-| `show_*` | Visibility of an internal sub-part. | `show_dot`, `show_label`, `show_controls`, `show_summary`, `show_grid`, `show_arrows` |
+| `show_*` | Visibility of an internal sub-part. | `show_dot`, `show_label`, `show_controls`, `show_summary`, `show_grid`, `show_arrows`, `show_legend` |
 | `allow_*` | Permission for an interaction. | `allow_selection` |
 | `auto_*` | Automatic opt-in behaviour. | (reserved — none today) |
 | `read_only`, `required`, `disabled`, `loading` | Standard form/async states — the ONLY unprefixed booleans. | Form leaves, Button. |
@@ -94,7 +97,7 @@ Every other component-defined boolean carries a prefix. Avoid `enable_*`, `is_*`
 
 ### Colour and scale
 
-`scale: { scheme: <name> }` — named colour scale for chart/categorical series (`bar_chart`/`line_chart`/`treemap` fills, `scatter` `color_field` dots; default `theme_categorical`). `color_map: { <category>: <hex|css-var> }` — per-category override of the auto-palette (ScatterPlot); unlisted categories still get a scale colour. `default_color` — fallback for a null/missing category value, not for "unmapped" ones. `color:` (direct string) is valid only inside `style:` or a JSONata-resolved style value, never a top-level config key. Chart fills come from `scale.scheme`; chrome comes from `theme.*`/`var(--*)`. Raw `#hex` only inside `color_map` or a factory-passed style.
+`scale: { scheme: <name> }` — named colour scale for chart/categorical series (`bar_chart`/`line_chart`/`treemap` fills, `scatter` `color_field` dots; default `theme_categorical`). `color_map: { <category>: <hex|css-var> }` — per-category override of the auto-palette (ScatterPlot); unlisted categories still get a scale colour. `default_color` — fallback for a null/missing category value, not for "unmapped" ones. `color:` (direct string) is valid only inside `style:` or a JSONata-resolved style value, never a top-level config key. Chart fills come from `scale.scheme`; chrome comes from `theme.*`/`var(--*)`. Raw `#hex` only inside `color_map` or a factory-passed style. Naming the resulting colours for the reader: `bar_chart`/`line_chart` render a legend automatically whenever `series_field` is set, while `scatter` needs the opt-in `show_legend: true` (see `ui-scatter` § `show_legend`).
 
 ### Icon references
 
@@ -120,11 +123,11 @@ snake_case in YAML (`x_field`, `page_size`, `read_only`); PascalCase for JS comp
 
 ### Canonical keys (current)
 
-These leaf-specific keys are canonical as written, no alternate spellings exist: `color_map`; `mode: "compact"|"default"` (`container_status`); `show_close_button` / `show_quadrants` (`modal` / `scatter`); `edge_distance`/`edge_strength`/`edge_bundling`/`edge_bundling_offset`/`edge_bundling_min_offset`/`edge_anchor_center` (`force_directed` — d3-internal names stay `link*`); row-click detail via top-level `on_row_click.detail_modal` (`table`); fire-and-forget signals via array-form `on_click` writing a domain collection with `key: $uuid`; flat-collection `tree_editor` with a `parent_id` field, internal `save_data_item`/`delete_data_item` dispatch. Also fixed by design: `code_editor.theme: "vs-dark"|"light"`; Table column `type: "tags"` (scope-polymorphic `type:` at column level is fine — only the top-level `type:` was replaced by `component:`); `text_input.type: "email"|"password"|"number"|"text"`.
+These leaf-specific keys are canonical as written, no alternate spellings exist: `color_map`; `mode: "compact"|"default"` (`container_status`); `show_close_button` / `show_quadrants` (`modal` / `scatter`); `edge_distance`/`edge_strength`/`edge_bundling`/`edge_bundling_offset`/`edge_bundling_min_offset`/`edge_anchor_center` (`force_directed` — d3-internal names stay `link*`); row-click detail via top-level `on_item_click.detail_modal` (`table`); fire-and-forget signals via array-form `on_click` writing a domain collection with `key: $uuid`; flat-collection `tree_editor` with a `parent_id` field, internal `save_data_item`/`delete_data_item` dispatch. Also fixed by design: `code_editor.theme: "vs-dark"|"light"`; Table column `type: "tags"` (scope-polymorphic `type:` at column level is fine — only the top-level `type:` was replaced by `component:`); `text_input.type: "email"|"password"|"number"|"text"`.
 
 ## Layout & responsive
 
-`layout_row`/`layout_column` size their children, own padding/scroll/gap, and adapt to mobile automatically. Most layouts need no `style:` blocks; reach for `style:` only when the primitives can't express what you need (it always wins, spread last).
+`layout_row`/`layout_column` size their children, own padding/scroll/gap, and adapt to mobile automatically. Most layouts need no `style:` blocks; use `style:` only when the primitives can't express what you need (it always wins, spread last).
 
 ### The two primitives
 
@@ -171,22 +174,22 @@ A layout primitive earns its keep by laying **multiple** children out. `check_ui
 
 ### `misplaced-under-config` (check_ui error)
 
-Some keys are read from the **component node**, never from `config:`. Nesting one inside `config:` is a silent dud — no runtime error, the content just never mounts or the handler never fires. `check_ui` (`schemas/validate.js`) now rejects them so `edit_ui` refuses the save instead of shipping a dead UI:
+Some keys are read from the **component node**, never from `config:`. Nesting one inside `config:` is a silent dud — no runtime error, the content never mounts or the handler never fires. `check_ui` (`schemas/validate.js`) now rejects them so `edit_ui` refuses the save instead of shipping a dead UI:
 
 - **`children:` / `data:` / `component:`** under `config:` → the subtree never mounts (observed: a `detail_modal` whose inputs were nested under `config:` → dead fields, no error).
-- **`on_row_click:`** under `config:` → the whole table's row-click is inert: no pointer cursor, no detail modal, no error (observed in the wild: a factory whose entire opportunity/programme tables were unclickable). `on_row_click` is a **top-level sibling of `config:`** — unlike `row_actions:`, which correctly lives **inside** `config:`. Don't mirror `row_actions`' placement.
+- **`on_item_click:`** (or its deprecated aliases `on_row_click` / `on_point_click`) under `config:` → the whole table's row-click is inert: no pointer cursor, no detail modal, no error (observed in the wild: a factory whose entire opportunity/programme tables were unclickable). It is a **top-level sibling of `config:`** — unlike `row_actions:`, which correctly lives **inside** `config:` (it is a config list, not an `on_<event>` handler). Don't mirror `row_actions`' placement. A top-level `row_actions:` still renders but is **deprecated** and warns.
 
 ```yaml
-# WRONG: on_row_click buried in config → rows silently unclickable
+# WRONG: on_item_click buried in config → rows silently unclickable
 - component: table
   config:
     columns: [ { field: name, label: Name } ]
-    on_row_click: { open: detail_modal }
-# RIGHT: on_row_click is a sibling of config
+    on_item_click: { open: detail_modal }
+# RIGHT: on_item_click is a sibling of config
 - component: table
   config:
     columns: [ { field: name, label: Name } ]
-  on_row_click: { open: detail_modal }
+  on_item_click: { open: detail_modal }
 ```
 
 ### Child sizing — `config.flex`
@@ -226,7 +229,7 @@ A modal accepts `body:`/`footer:` as named keys carrying child configs directly 
   footer:
     - component: button
       title: Save
-      on_click: { action: save_data_item, collection: orders, key: "$: row.key", data_field: row }
+      on_click: { action: save_data_item, collection: orders, key: "$: data.key", data_field: data }
 ```
 
 ### `grid` is LEGACY
@@ -350,7 +353,9 @@ Object-form values can be literals or `$:` expressions resolved against the PARE
 
 ## Slot rendering
 
-Some parents group children into named slots via the child's top-level `slot:`. `modal`/`card` allow `header`/`body`/`footer` (default `body` for children with no `slot:`); `tabs` allows `tab`/`panel` (no default — every child MUST declare `slot:`). A `slot:` value outside the parent's allowlist is rejected; children under a non-slot-aware parent MUST NOT carry `slot:`.
+Some parents group children into named slots via the child's top-level `slot:`. `modal` allows `header`/`body`/`footer` (default `body` for children with no `slot:`); `tabs` allows `tab`/`panel` (no default — every child MUST declare `slot:`). A `slot:` value outside the parent's allowlist is rejected; children under a non-slot-aware parent MUST NOT carry `slot:`.
+
+**`card` is in the allowlist but ignores it.** The renderer groups a card's children by slot and hands the groups over, but `Card` never reads them — every child renders in the body, in source order, whatever its `slot:`. So `slot: header` / `slot: footer` on a card child is silently inert. Use `header_buttons:` for header controls ([ui-card](ui-card.md)); there is no card footer region. Tracked as `[composable:card-slots-advertised-not-implemented]`.
 
 ```yaml
 component: modal
@@ -369,9 +374,69 @@ Any config taking a derived value (cell labels, formatted strings, computed styl
 
 Default is literal: `label: "Email Drafter"` → literal; numbers/booleans/arrays → literal. JSONata via `$:` prefix: `label: "$:value.subject"` → evaluated. Object form interchangeable: `label: { jsonata: "value.subject" }` ≡ prefix form. Escape a literal `$:` with `"$$:..."`. Non-strings never evaluate. Reserved structural keys are literal-only: `component`, `id`, `data.collection`, `data.state`, `data.latest`, `data.endpoint`, `data.poll`, `data.inline`, `on_<event>.action`, `slot`, `config.pagination.mode`.
 
-The current row/node/scope is the implicit root — reference fields with **bare names** (`subject`, `value.body`). `$user`, `$factory`, `$page`, `$rowIndex` are available named scope vars depending on site.
+The current row/node/scope is the implicit root — reference fields with **bare names** (`subject`, `value.body`). **There are no `$`-prefixed scope variables.** The tokenizer reads any `$word` as a *builtin function name* and expects a `(` after it, so `$user.email` is a parse error that resolves to `undefined`. Everything you can read is a bare key on the DataRef root (below).
 
 > **Common mistake — no `$.field`.** The mini-parser doesn't support the real-JSONata `$` root sigil. `"$:$.prospect_name"` silently fails (resolver returns `undefined`, renderer falls back to the literal string). Always use bare names: `"$:prospect_name"`, `"$:'Review: ' & prospect_name"`, `"$:touch_count >= 3 ? 'exhausted' : 'active'"`.
+
+### Reserved DataRef root keys
+
+The DataRef root is both the form-binding namespace (`field: notes`) and the `$:` expression root, so the runtime reserves a handful of key names. Don't bind a form field to them and don't use them as your own data keys.
+
+| Key | Written by | Read as |
+|---|---|---|
+| `data` | **every** click / `open` — the subject currently in scope | `$: data.invoice_id` |
+| `subject` | `open` with a non-table `subject:` | `$: subject.title` |
+| `row` | table row click / `row_actions` — **deprecated**, use `data` | `$: row.invoice_id` |
+| `node` | `force_directed` node click — **deprecated**, use `data` | `$: node.type` |
+| `point` | `scatter` point click — **deprecated**, use `data` | `$: point.label` |
+| `session` | the runtime, from the logged-in user — see below | `$: session.user.email` |
+
+#### `data` — the one prefix that always resolves
+
+Every leaf that fires a handler names the thing that was clicked, but each used to name it after **itself**: a table published `row`, a `scatter` `point`, a `force_directed` `node`, a card/button nothing at all (the DataRef snapshot was passed bare). So `$: row.title` was correct on a table row click and silently `undefined` on a kanban card — the single most common authoring trap in this surface.
+
+`data` is now published alongside whatever the leaf calls it, in both places a subject appears:
+
+- **In the handler's own params** — `on_item_click: { action: open, subject: { t: '$: data.title' } }`. Bare field names (`$: title`) also resolve here.
+- **In the opened modal's body** — `title: '$: data.title'`, `field: data.role`.
+
+```yaml
+# identical body whether a table row, a kanban card, or the chat opened it
+- component: modal
+  id: person_modal
+  title: '$: data.title'
+  body:
+    - component: text_input
+      config: { field: data.role, label: Role }
+```
+
+The leaf-specific names still resolve on their own leaf and are **deprecated** — `check_ui` warns on `row.` / `point.` / `node.` in an event handler or a `field:` / `data_field:` binding. `subject` is not deprecated: it is not leaf-specific, and an `action: open` publishes under both.
+
+`data` holds the **most recent** subject. Opening a second modal over the first repoints it, and closing the inner one drops it rather than restoring the outer — stacked subjects must be read by their own key.
+
+**Not covered:** inside an `editable_grid`, a `config:` expression such as `cells.key` resolves `row` and `column` against the grid's own **axes**, not a subject. That `row.` is permanent and correctly unflagged.
+
+#### `session` — the logged-in user, read-only
+
+`session` is an **immutable** namespace carrying who the browser is authenticated as. It exists so a view can scope itself to the current user with no URL param and no picker:
+
+```yaml
+- component: editable_grid
+  data: { collection: timesheet }
+  filter:
+    member: "$: session.user.email"     # this person's rows only
+```
+
+| Path | Type | Notes |
+|---|---|---|
+| `session.user.id` | string | stable id; `anonymous` when auth is off |
+| `session.user.email` | string | `anonymous@local` when auth is off |
+| `session.user.name` | string \| null | display name, if the provider gave one |
+| `session.user.is_anonymous` | boolean | `true` under `AUTH_PROVIDERS=none` |
+
+It is **read-only, enforced**: the object is deep-frozen and the key is non-writable, and `field: session…` / `data_field: session…` are REJECTED by validation on every component. Read it with a `$:` expression; never bind it.
+
+> ⚠️ **`session` is a mirror, never a gate.** It reflects an identity the server already established; it never establishes one. A `filter:` on `session.user.email` hides other people's rows *from the screen* — it does not stop the API from returning them, and a user can still write rows that aren't theirs. Use it for convenience and correct defaults, not for access control. Real per-user isolation is server-side. For the same reason `session` carries identity ONLY — no roles, no permission flags.
 
 ### Capabilities & limits
 
@@ -386,7 +451,47 @@ The current row/node/scope is the implicit root — reference fields with **bare
 | Arithmetic `+ - * /`, unary `-` | Predicates/filters `a[pred]`, regex |
 | Logical `and`/`or`/`not` | `$` root sigil / `$$` root-array sigil |
 | Ternary `cond ? then : else` | Higher-order functions |
-| Builtins `$uppercase` `$lowercase` `$substring` `$string` `$number` `$boolean` `$not` `$length` | Any other builtin |
+| Builtins — the 12 in the table below | Any other builtin |
+| Names `[a-zA-Z_][a-zA-Z0-9_]*` | Backtick-quoted names `` `some-key` `` — so **hyphenated keys are unreachable** (see below) |
+
+**The builtin library is 12 functions and only these 12.** Anything else (`$sum`, `$map`, `$now`, `$formatNumber`, …) is not implemented and the expression fails silently.
+
+| Builtin | Notes |
+|---|---|
+| `$uppercase(s)` `$lowercase(s)` | `null` / absent in → same out |
+| `$substring(s, start)` `$substring(s, start, length)` | |
+| `$string(x)` | `null` / absent → `""` |
+| `$number(x)` `$boolean(x)` `$not(x)` | `$number(null / absent)` → same out; `$number("abc")` → `NaN` |
+| `$length(x)` | string or array length; anything else → `0`. Deliberately does **not** pass absent through — `$length(missing)` is `0`, so `$length(missing) + 1` is `1` |
+| `$round(x)` `$round(x, precision)` | `precision` = digits after the decimal point, default `0`, **may be negative** (`$round(1234, -2)` → `1200`). Uses JSONata's **round-half-to-even** (banker's rounding): `$round(0.5)` → `0`, `$round(1.5)` → `2`, `$round(2.5)` → `2` — not `Math.round`'s half-away-from-zero |
+| `$floor(x)` `$ceil(x)` `$abs(x)` | |
+
+**An absent operand makes the whole arithmetic expression absent.** `+ - * /` and unary `-` propagate a missing (or `null`) field the way the spec does: the result is `undefined`, propagation is transitive through nesting and through the numeric builtins, and `&`-concat then drops it. So a row with no `headroom_aud` renders `Room left: $m`, not `Room left: $NaNm`. The numeric builtins behave the same way, so `$string($round(missing))` is `""` and never an error. (`%` modulo is not part of the subset at all — it does not lex.)
+
+**Hyphenated keys are unreachable — `$: data.some-key` cannot be written.** A name is `[a-zA-Z_][a-zA-Z0-9_]*`, with no hyphen, so `data.some-key` lexes as *subtraction*: `data.some` minus `key`. Both sides are usually absent, so the expression quietly evaluates to `undefined` and the value renders blank — there is no error to tell you why. JSONata's answer is backtick-quoted names (`` `some-key` ``); **we do not support those** — a backtick is an unexpected character and fails the whole expression. This never affects tf's own identifiers (collection and state names are validated `^[a-z0-9_]+$`), only an arbitrary hyphenated key inside a row's stored `value` blob. **Workaround: rename the key to `snake_case` in the agent that writes the row.** If a `$:` projection of a stored field comes back mysteriously blank, check the key for a hyphen first.
+
+#### String escapes
+
+String literals inside a `$:` expression use **JSON escaping** — eight named escapes plus `\uXXXX`:
+
+| Escape | Produces | Escape | Produces |
+|---|---|---|---|
+| `\n` | newline | `\"` | `"` |
+| `\t` | tab | `\\` | `\` |
+| `\r` | carriage return | `\/` | `/` |
+| `\b` `\f` | backspace, form feed | `\uXXXX` | the character at that four-hex code point (`—` → `—`) |
+
+`\'` also works — handy inside a single-quoted literal — via the unknown-escape rule below.
+
+This is what makes multi-line output possible, and several components are already built for it: a `scatter` `tooltip_template` renders with `white-space: pre-wrap`, so `"\n"` breaks the line.
+
+```yaml
+tooltip_template: >-
+  $: title & "\n" &
+     "Room left: $" & $string($round(headroom_aud / 1000000, 1)) & "m"
+```
+
+> ⚠️ **Deliberate deviation from the JSONata spec.** Real JSONata raises `S0103: Unsupported escape sequence` for an unknown escape and for a malformed `\uXXXX`. **We emit the escaped character verbatim instead** — `"a\db"` is `adb`, and `"a\u12g4b"` (not four hex digits) is `au12g4b`. The reason is the failure mode: a throw inside a `$:` expression is caught by the resolver and turns the **whole expression** into `undefined` plus a `console.warn`, so under spec behaviour one stray backslash would silently blank an entire tooltip or label. Degrading a single character is the better trade for UI templating. Nothing in the escape handling throws.
 
 Two traps: (1) **Only string leaves evaluate** — `resolveValue` evaluates only a string starting `$:`; the object form `data: { $: "<expr>" }` passes through literally, so evaluate a whole expression with the string form `data: "$: <expr>"`. (2) **No object building** — you cannot construct/reshape a stored object in YAML (`data: "$: { md: ..., tiv: a + b }"` fails).
 
@@ -394,7 +499,7 @@ Two traps: (1) **Only string leaves evaluate** — `resolveValue` evaluates only
 
 ### `$:` evaluation is render-time only (Model A doctrine)
 
-One evaluator, `ComponentRenderer`, at render time, against the current DataRef — parents never pre-evaluate a child's YAML. If a click-handler needs the clicked subject visible to children, the parent publishes the subject into the DataRef instead: `force_directed` node click merges `{ node: <clonedNode> }`, `scatter` point click merges `{ point: <clonedPoint> }`, `table` row click / `row_actions` merges `{ row: <clonedRow> }`. Children in the opened subtree read `$:node.type`, `$:point.label`, `$:row.invoice_id` directly. The merge is shallow over the existing DataRef root — siblings keep seeing form state. The **`open` action** likewise publishes its `subject:` param before activating the modal — under the `row` key when the subject carries `_tf_subjectKey: 'row'` (table-origin / the chat `open_ui_modal` tool), else under `subject` — so a Button-open or a chat-opened modal body reads `$: row.<field>` / `$: subject.<field>`.
+One evaluator, `ComponentRenderer`, at render time, against the current DataRef — parents never pre-evaluate a child's YAML. If a click-handler needs the clicked subject visible to children, the parent publishes the subject into the DataRef instead. Every publish lands under **`data`** plus the leaf's own historical key (`node` for a `force_directed` node click, `point` for a `scatter` point click, `row` for a `table` row click / `row_actions`, `subject` for an `open` with a non-table `subject:`). Children in the opened subtree read `$: data.<field>` whichever leaf opened them; the leaf-specific spellings still work and are deprecated. The merge is shallow over the existing DataRef root — siblings keep seeing form state. The **`open` action** publishes its `subject:` param the same way before activating the modal, so a Button-open or a chat-opened modal body reads `$: data.<field>` (or `$: subject.<field>`) identically.
 
 **Which leaves can read a published subject (no `data:` block)** — only DataRef-aware leaves: `detail_list` ✅ (the canonical label→value record for a subject; no-`data:` mode reads each `fields[].field` from DataRef — use instead of stacked read-only `text_input`s), `text_input`/`textarea` ✅ (reads `field` from DataRef, `read_only: true` for display cells, `format:` still runs), `markdown` ✅ (no-`data:` mode reads `field` from DataRef, renders its own empty state when blank), `tag_list` ✅ (reads `field` from DataRef, a string-array field renders one chip per item, `empty_text` for zero). `metrics` ❌ — reads only via its own `data:` block (`useBoundData`), no DataRef fallback, renders `<EmptyState>` against a published subject; use `detail_list` instead.
 
@@ -402,7 +507,7 @@ A composite "Overview tab" (field record + summary) is built from `detail_list` 
 
 ### `open:` accepts a string id only
 
-Click-opens-a-component contracts (`config.on_node_click.open`, `config.on_point_click.open`, table `detail_modal`, any future `open:`) take a **string id only** — the `id:` of an id-registered component (a `modal`) mounted anywhere in the same view.
+Click-opens-a-component contracts (`on_item_click.open`, `on_node_click.open`, table `detail_modal`, any future `open:`) take a **string id only** — the `id:` of an id-registered component (a `modal`) mounted anywhere in the same view.
 
 **"Sibling" is about the id registry, not the DOM.** `open:` resolves against the page-level id registry (the nearest `DataRefProvider`), NOT literal tree siblings — and a `modal` is React-portaled, so its position in the layout is irrelevant as long as it's mounted. **Declare modals in the top-level `default_ui.modals` array** (a sibling of `default_ui.layout`, keyed by `id:`) — they mount page-level in the same registry, so any trigger opens one by id and one def is reusable from many sites (see `ui-modal`). You therefore never **wrap the layout in a `layout_column` to make a modal a "sibling"** — that wrapper is a redundant singleton (a modal isn't in-flow) that `check_ui`/`edit_ui` flag; keep a root `tabs` as the single root node. Nesting a modal inside the layout tree still works but is **deprecated** (`edit_ui` warns) — move it to `default_ui.modals`.
 
@@ -410,7 +515,7 @@ Click-opens-a-component contracts (`config.on_node_click.open`, `config.on_point
 - component: force_directed
   config:
     on_node_click:
-      open: "$: node.type = 'state' ? 'state_modal' : 'agent_modal'"
+      open: "$: data.type = 'state' ? 'state_modal' : 'agent_modal'"
 - component: modal
   id: agent_modal
   ...                              # dormant until triggered
@@ -419,11 +524,11 @@ Click-opens-a-component contracts (`config.on_node_click.open`, `config.on_point
   ...
 ```
 
-Inline object form (`open: { component: modal, ... }`) is rejected by the strict gate — always declare the modal as a sibling with `id:` and reference it. `open:` may be a literal string or a `$:` expression yielding a string at click time. Id-ref targets are dormant until triggered. If resolution yields `undefined`, a non-string, or an unmatched id, the renderer fires an error toast and renders nothing — no silent failures.
+The strict gate rejects inline object form (`open: { component: modal, ... }`) — always declare the modal as a sibling with `id:` and reference it. `open:` may be a literal string or a `$:` expression yielding a string at click time. Id-ref targets are dormant until triggered. If resolution yields `undefined`, a non-string, or an unmatched id, the renderer fires an error toast and renders nothing — no silent failures.
 
 ## Actions
 
-Buttons, table `row_actions`, force-graph node clicks, and any interactive surface emit through top-level event-handler keys (`on_click`, `on_change`, `on_row_click`, `on_node_click`, `on_point_click`, `on_select`, `on_blur`). Each handler is an object whose `action:` names a dispatch target, with flat sibling params (no `args:` nest). A closed set of canonical actions is handled by the dispatcher; everything else bubbles to the host page via `custom:<name>`.
+Buttons, table `row_actions`, force-graph node clicks, whole-card clicks (`card.on_click` — see [ui-card](ui-card.md)), and any interactive surface emit through top-level event-handler keys (`on_click`, `on_change`, `on_item_click`, `on_node_click`, `on_select`, `on_blur`). `on_item_click` is the universal "a rendered item was clicked" handler — a table row, a scatter point; the per-leaf spellings `on_row_click` / `on_point_click` still fire and are **deprecated** (`check_ui` warns). Each handler is an object whose `action:` names a dispatch target, with flat sibling params (no `args:` nest). The dispatcher handles a closed set of canonical actions; everything else bubbles to the host page via `custom:<name>`.
 
 ### Canonical action enum (6 entries)
 
@@ -440,11 +545,15 @@ Only these six are accepted — any other `action:` value is rejected by the str
 
 **Universal modifier:** any action accepts `then_close: true` to synthesise a follow-up `close`. Canonical actions close on success; `custom:*` closes optimistically (immediately after dispatch — no success signal comes back from custom handlers).
 
+**`key:` may hold any characters.** The dispatchers URL-encode it, so compound keys built with reserved characters are safe — `key: "$: slug & '#' & email & '#' & week_start"` round-trips exactly. (Before this was encoded, a `#` was read as a URL fragment: the PUT reached the server truncated at the `#` and wrote a *different* row with no error. If you see writes landing under a short prefix of the intended key, that's the symptom.)
+
 ### Write semantics — `data` is a shallow merge, never a wipe
 
 The backend PUT applies `data` as a shallow merge into `value` (`value || patch`): top-level keys in `data` overwrite, keys absent are preserved, nested objects replace wholesale (not deep-merged) — a value-wipe is structurally impossible. `{ data, state }` merges `data` and sets `state`; `{ data }` merges `data` (existing `state` preserved on update, new row defaults `state: new`); `{ state }` sets `state` only, `value` untouched. Full-overwrite (`replace: true`) and key-deletion (`unset: [...]`) were designed but deferred (YAGNI) — derive-and-rewrite in a Python agent if needed.
 
 **Where the `data` patch comes from** (every dispatcher resolves its action spec — including any `data:` map — against its local context first): **`data: { ... }`** — explicit authored map, honoured on every dispatcher, becomes the PUT `data`; leaves may be `$:` projections, but you cannot synthesise a whole map inside one `$:` expression. **`data_field: <field>`** — pulls a dot-path slice out of the resolved data (Button snapshot or authored `data:` map) and PUTs just that slice; may be nested (`data_field: rubric.weights`). **Button/Modal-footer with neither** — auto-attach the live DataRef snapshot ⇒ full-snapshot save; because the write merges, keys absent from the snapshot still survive. **Bare dispatchers** (Table `row_actions`, `select.on_change`, input `on_blur`, `ConfirmDestructiveModal` confirm) do NOT auto-attach a snapshot — state-only path (`data` omitted, `value` preserved, only `state` flips), for pure state transitions.
+
+**`data:` is a payload, not a context.** Authoring one never changes what the handler's OTHER `$:` params see: `key:`, `state:`, `collection:` and friends always resolve against the dispatcher's own context (a Button's DataRef snapshot, a table row_action's clicked row), never against the map being written. So `key: '$: subject.slug'` beside a `data:` map that has no `subject` still resolves — the two are evaluated independently. (Until 2026-08-01 a Button's siblings were resolved against the outgoing payload instead, which made an unresolvable `key` no-op the write silently while `then_close` still closed the modal.)
 
 E.g. `on_click: { action: save_data_item, collection: prompts, key: "$: prompt_key", data_field: text, then_close: true }` slices the snapshot down to just `text` instead of saving the whole row. `data_field` reads from the live DataRef, including in-modal edits since open. To save several fields from a non-Button dispatcher, point `data_field` at a shared parent object, or author an explicit `data:` map with a `$:` leaf per field. Canonical shape is a top-level event key with flat sibling params — see "One example per event type" below.
 
@@ -459,7 +568,7 @@ E.g. `on_click: { action: save_data_item, collection: prompts, key: "$: prompt_k
 
 ### One example per event type
 
-`on_click` (button): `{ action: save_data_item, collection: review_queue, key: "$: id", state: approved }`. `on_change` (select): `{ action: save_data_item, collection: tickets, key: "$: ticket_id", data_field: status }`. `on_blur`, save-on-defocus (textarea): `{ action: save_data_item, collection: invoices, key: "$: invoice_id", data_field: notes }`. `on_select`, combo/list (multi_select): `{ action: save_data_item, collection: prospects, key: "$: id", data_field: tags }`. `on_row_click`, opens registered modal by id (table): `{ open: invoice_detail_modal }`. `on_node_click` (force_directed): `{ open: "$: node.type = 'state' ? 'state_modal' : 'agent_modal'" }`. `on_point_click` (scatter): `{ open: point_detail_modal }`.
+`on_click` (button): `{ action: save_data_item, collection: review_queue, key: "$: id", state: approved }`. `on_change` (select): `{ action: save_data_item, collection: tickets, key: "$: ticket_id", data_field: status }`. `on_blur`, save-on-defocus (textarea): `{ action: save_data_item, collection: invoices, key: "$: invoice_id", data_field: notes }`. `on_select`, combo/list (multi_select): `{ action: save_data_item, collection: prospects, key: "$: id", data_field: tags }`. `on_item_click`, opens registered modal by id (table row): `{ open: invoice_detail_modal }`; same key on a scatter point: `{ open: point_detail_modal }`. `on_node_click` (force_directed): `{ open: "$: data.type = 'state' ? 'state_modal' : 'agent_modal'" }`.
 
 ### `key: $uuid` — fresh-key-per-click pattern
 
@@ -492,7 +601,7 @@ SET half of the symmetric pair with `key_from_url` (see Data binding Mode 6). Us
 # Left pane: a page list. Clicking a row selects which page the viewer shows.
 - component: table
   data: { collection: wiki }
-  on_row_click: { action: set_url_param, param: wiki_select, value: "$: row._key", history: push }
+  on_item_click: { action: set_url_param, param: wiki_select, value: "$: data._key", history: push }
 
 # Right pane: a viewer bound to the SAME param. Re-renders to follow the click.
 - component: markdown

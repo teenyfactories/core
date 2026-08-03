@@ -1,6 +1,6 @@
 # Setup
 
-This page gets you from zero to a running factory. There are two ways to run: **standalone** (one factory, just `docker compose`) and **under the orchestrator** (many factories, full UI). Both share the same factory code.
+This page gets you from zero to a running factory. You can run a factory two ways: **standalone** (one factory, just `docker compose`) and **under the orchestrator** (many factories, full UI). Both share the same factory code.
 
 ## Prerequisites
 
@@ -20,7 +20,7 @@ You rarely install it by hand for running factories — the agent base image `gh
 
 ## The agent base image
 
-Every agent container runs on `ghcr.io/teenyfactories/agent:dev`, which has the library and all Python dependencies baked in. Your agent script is mounted at `/app/script.py`; nothing else mounts by default. This means agent containers start fast and your factory repo stays tiny (no `requirements.txt`, no build step for the common case).
+Every agent container runs on `ghcr.io/teenyfactories/agent:dev`, which has the library and all Python dependencies baked in. Your agent script is mounted at `/app/script.py`; nothing else mounts by default. So agent containers start fast and your factory repo stays tiny (no `requirements.txt`, no build step for the common case).
 
 ## Create a factory
 
