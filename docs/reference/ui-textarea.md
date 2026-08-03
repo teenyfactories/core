@@ -70,7 +70,7 @@ When used inside a modal or detail panel with a published subject (e.g. clicked 
 ## Gotchas
 
 - **Full snapshot on no `data_field`:** If the textarea sits in a Button/Modal footer with `on_click` and no `data_field` specified, it auto-attaches the full DataRef snapshot as the patch. Avoid surprises — use `data_field` to save only the textarea value, or wrap the textarea + button in a separate form context.
-- **Rows is visual only:** The `rows` config sets the DOM `rows` attribute; tall content still scrolls. CSS `style: { maxHeight, overflowY }` can override if needed.
+- **Rows is visual only:** The `rows` config sets the DOM `rows` attribute; tall content still scrolls. CSS `style: { maxHeight, overflowY }` can override.
 - **Preserve siblings:** The write merges shallowly — other fields on the same row are never wiped.
 
 See `Composable UI Reference` > `Data binding`, `Actions`, `Which leaves can read a published subject` for context on DataRef sharing and write semantics.

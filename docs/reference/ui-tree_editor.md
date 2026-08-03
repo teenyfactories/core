@@ -1,7 +1,7 @@
 # ui-tree_editor
 
 ## Purpose
-Hierarchical tree editor for flat collections. Displays parent-child relationships via `parent_id` pointers; supports add, rename, and delete operations with client-side tree construction.
+Hierarchical tree editor for flat collections. Displays parent-child relationships via `parent_id` pointers; supports add, rename, and delete with client-side tree construction.
 
 ## When to use / when NOT
 **Use:** Folder structures, org charts, hierarchies, nested workflows.

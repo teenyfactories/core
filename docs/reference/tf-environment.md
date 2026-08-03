@@ -39,7 +39,7 @@ tf.AGENT_ID       # Per-container/pod hostname; distinguishes replicas of the sa
 
 **Live config resolution (no pod restart).** Internally, the framework resolves config values through a cascade: the orchestrator's in-built secrets/runtime-var store **first** (same `:8998` path `tf.secrets()` uses), then the container's `os.environ`. This means an operator can edit a value in the UI env-var table (e.g. set a GLOBAL `DEFAULT_LLM_PROVIDER=openrouter`) and **running agents pick it up at call time** — no container restart, no re-injection. Identity vars (`FACTORY_NAME`, `AGENT_NAME`, `AGENT_SLUG`, `AGENT_ID`) are *not* in the runtime-var table and always come straight from `os.environ`. The cascade is **deny-by-default** (only registered keys resolve from the table; everything else 404s and falls to env), **cached** per-process (~45 s, so reads stay off the hot path), and **fail-open** (if the orchestrator is unreachable or the feature is off, reads fall straight to `os.environ` and never block the agent). Factory authors don't call this directly — `tf.call_llm`, `tf.embed`, etc. resolve their own config this way automatically.
 
-Available env vars in containers (any of these registered in the UI env-var table resolves live via the cascade above; otherwise the injected container value is used):
+Available env vars in containers (any of these registered in the UI env-var table resolves live via the cascade above; otherwise the container uses the injected value):
 - `FACTORY_NAME` — factory name
 - `AGENT_NAME` — agent display name (mutable; UI-editable)
 - `AGENT_SLUG` — canonical agent identifier from `factory.yml`; stable, machine-readable

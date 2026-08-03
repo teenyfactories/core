@@ -249,7 +249,7 @@ The HTTP write path used by the composable UI. Body must include `data`, `state`
 
 **`?since=<ISO-8601>` — reconnect catch-up**
 
-Used by the composable `useBoundData` hook to recover from a WebSocket disconnect without throwing away cached state. Caller records the largest `updated_at` it has seen, then on reconnect issues `?since=<that timestamp>` to pick up only rows that have changed since.
+The composable `useBoundData` hook uses this to recover from a WebSocket disconnect without throwing away cached state. Caller records the largest `updated_at` it has seen, then on reconnect issues `?since=<that timestamp>` to pick up only rows that have changed since.
 
 Behaviour:
 

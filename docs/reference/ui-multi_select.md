@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Combo-box with checkboxes that binds to an **array** field. Supports static or dynamic option sources from factory configuration.
+Combo-box with checkboxes that binds to an **array** field. Supports static or dynamic option sources from factory config.
 
 ## When to use / when NOT
 
