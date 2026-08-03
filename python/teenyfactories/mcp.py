@@ -4,7 +4,9 @@ MCP Tool Registration
 Factories expose tools to the orchestrator's LLM chat via dedicated collections
 in factory_data:
 
-- `_mcp_tool_catalog` — one row per agent. key=AGENT_NAME, data={server, tools}
+- `_mcp_tool_catalog` — one row per agent. key=AGENT_SLUG (the stable
+  factory.yml key; falls back to AGENT_NAME only if the slug wasn't injected),
+  data={server, tools}
   if MCP is configured, else {}. Written once on first `tf.run_pending()`.
 - `_mcp_{toolname}` — one row per call. key=correlation_id.
   state progresses 'request' -> 'response' on the same row; the call's
@@ -31,12 +33,25 @@ Usage:
 Order of add_mcp_server() vs add_mcp_tool() doesn't matter. The catalog row
 is written and per-tool state subscriptions are registered on the first
 `tf.run_pending()` tick.
+
+Tool names must match `^[a-zA-Z0-9_-]{1,64}$` — the name becomes a `_mcp_<name>`
+collection + NOTIFY channel and the external `<agent>_<name>` tool id, so a name
+with spaces/dots/special chars is rejected (logged as an ERROR, tool skipped).
 """
 
+import re
 from typing import Callable, Dict, Any, Optional, List
 
 from . import config
 from .logging import log_error, log_debug
+
+# A tool name becomes a `_mcp_<name>` collection, a Postgres NOTIFY channel, and
+# a closure key — and the orchestrator composes the external tool name as
+# `<agent>_<name>`, which MUST match ^[A-Za-z0-9_-]{1,64}$. A name with spaces,
+# dots, or other special chars silently corrupts the channel and breaks the
+# tool, so registration rejects anything that doesn't match. Compiled once.
+_TOOL_NAME_PATTERN = r'^[a-zA-Z0-9_-]{1,64}$'
+_TOOL_NAME_RE = re.compile(_TOOL_NAME_PATTERN)
 
 # Module-level registry
 _mcp_server: Optional[Dict[str, str]] = None
@@ -71,7 +86,24 @@ class McpToolBuilder:
         return self
 
     def do(self, handler: Callable):
-        """Register the handler function for this tool."""
+        """Register the handler function for this tool.
+
+        The tool `name` must match `^[a-zA-Z0-9_-]{1,64}$`. `.do()` is the
+        commit point (where the tool lands in the catalog + gets its state
+        subscription), so the guard lives here: a bad name never registers.
+        """
+        # Log-and-skip rather than raise: registration runs at agent import /
+        # first-tick time, and crashing the agent over one bad tool name would
+        # take down every other (valid) tool and handler it hosts. A loud
+        # ERROR row in factory_logs surfaces the mistake; the tool is simply
+        # not exposed. Guards the `_mcp_<name>` collection / NOTIFY channel.
+        if not isinstance(self._name, str) or not _TOOL_NAME_RE.match(self._name):
+            log_error(
+                f"🔨 Rejected MCP tool name {self._name!r}: must match "
+                f"{_TOOL_NAME_PATTERN} (letters, digits, underscore, hyphen; "
+                f"1-64 chars). Tool NOT registered."
+            )
+            return handler
         tool = {
             'name': self._name,
             'description': self._description,
@@ -86,7 +118,15 @@ class McpToolBuilder:
 
 
 def add_mcp_tool(name: str, description: str) -> McpToolBuilder:
-    """Register an MCP tool. Call before or after add_mcp_server() — order doesn't matter."""
+    """Register an MCP tool. Call before or after add_mcp_server() — order doesn't matter.
+
+    `name` must match `^[a-zA-Z0-9_-]{1,64}$` (letters, digits, underscore,
+    hyphen; 1-64 chars). It becomes a `_mcp_<name>` collection + Postgres NOTIFY
+    channel and is composed into the external tool name `<agent>_<name>`, so a
+    name with spaces / dots / special chars would corrupt the channel. A name
+    that fails validation is logged as an ERROR to factory_logs at `.do()` time
+    and the tool is NOT registered (the agent keeps running).
+    """
     return McpToolBuilder(name, description)
 
 
@@ -102,7 +142,15 @@ def add_mcp_server(name: str, description: str = ''):
 # =============================================================================
 
 def _agent_name() -> str:
-    return config.AGENT_NAME
+    # Stable identity for the MCP catalog key + each tool's `agent` field + call
+    # routing: AGENT_SLUG (the factory.yml key — lowercase-alnum/_/-), NOT
+    # AGENT_NAME (the mutable display name). The orchestrator composes the
+    # external tool name as `<agent>_<tool>`, which MUST match
+    # ^[A-Za-z0-9_-]{1,64}$ — a display name like "Meeting Collector" carries a
+    # space → an invalid MCP tool name, and renaming the display name would
+    # silently re-key the whole catalog. AGENT_NAME is only a last-resort fallback
+    # for the degenerate case where AGENT_SLUG wasn't injected.
+    return config.AGENT_SLUG or config.AGENT_NAME
 
 
 def _maybe_publish_mcp():
@@ -136,6 +184,18 @@ def _maybe_publish_mcp():
     except Exception as e:
         log_error(f"🔨 Failed to write MCP catalog row: {e}")
         # Fall through so per-tool subscriptions still register
+
+    # LEGACY: pre-slug builds keyed this catalog row by AGENT_NAME (the display
+    # name), producing invalid, mutable external tool names ("Meeting
+    # Collector_ingest_transcript"). Drop that stale row on startup so the
+    # orchestrator doesn't surface BOTH the old (invalid) and new (slug) tools.
+    # Remove this cleanup once every deployed factory has restarted post-fix.
+    legacy_key = config.AGENT_NAME
+    if legacy_key and legacy_key != agent_name:
+        try:
+            collection('_mcp_tool_catalog').remove(legacy_key)
+        except Exception as e:
+            log_debug(f"🔨 MCP catalog legacy-row cleanup skipped: {e}")
 
     if has_tools:
         tool_names = [t['name'] for t in _mcp_tools]

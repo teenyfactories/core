@@ -5,7 +5,7 @@ Placeholder for the JavaScript port of [TeenyFactories](https://github.com/teeny
 Use the Python implementation today:
 
 ```bash
-pip install --pre teenyfactories
+pip install teenyfactories
 ```
 
 ## Why this package exists

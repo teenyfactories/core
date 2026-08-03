@@ -1,6 +1,6 @@
 # Setup
 
-This page gets you from zero to a running factory. There are two ways to run: **standalone** (one factory, just `docker compose`) and **under the orchestrator** (many factories, full UI). Both share the same factory code.
+This page gets you from zero to a running factory. You can run a factory two ways: **standalone** (one factory, just `docker compose`) and **under the orchestrator** (many factories, full UI). Both share the same factory code.
 
 ## Prerequisites
 
@@ -13,14 +13,14 @@ This page gets you from zero to a running factory. There are two ways to run: **
 The `teenyfactories` library is on PyPI (pre-release):
 
 ```bash
-pip install --pre teenyfactories
+pip install teenyfactories
 ```
 
 You rarely install it by hand for running factories — the agent base image `ghcr.io/teenyfactories/agent:dev` ships with it pre-installed. Install it locally for editor autocomplete, type-checking, and tests.
 
 ## The agent base image
 
-Every agent container runs on `ghcr.io/teenyfactories/agent:dev`, which has the library and all Python dependencies baked in. Your agent script is mounted at `/app/script.py`; nothing else mounts by default. This means agent containers start fast and your factory repo stays tiny (no `requirements.txt`, no build step for the common case).
+Every agent container runs on `ghcr.io/teenyfactories/agent:dev`, which has the library and all Python dependencies baked in. Your agent script is mounted at `/app/script.py`; nothing else mounts by default. So agent containers start fast and your factory repo stays tiny (no `requirements.txt`, no build step for the common case).
 
 ## Create a factory
 
@@ -117,7 +117,7 @@ Agents read configuration from environment variables. The most common:
 
 | Variable | Purpose |
 |---|---|
-| `DEFAULT_LLM_PROVIDER` | `openai` · `anthropic` · `google` · `ollama` · `azure_bedrock` |
+| `DEFAULT_LLM_PROVIDER` | `openai` · `anthropic` · `google` · `ollama` · `azure_bedrock` · `digitalocean` · `openrouter` |
 | `DEFAULT_LLM_MODEL` | Model name (also overridable per call via `tf.llm().model(...)`) |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` | Provider credentials |
 | `DEFAULT_EMBEDDING_PROVIDER` | `openai` · `ollama` · `openrouter` |
@@ -129,5 +129,5 @@ The orchestrator injects `FACTORY_NAME` / `AGENT_NAME` per container; you provid
 
 ## Next
 
-- **[The tf module](tf-module.md)** — the full Python API your agents use.
-- **[Composable UI](composable-ui.md)** — build the dashboard in `default_ui`.
+- **[The tf module](reference/tf-guide.md)** — the full Python API your agents use.
+- **[Composable UI](reference/ui-guide.md)** — build the dashboard in `default_ui`.

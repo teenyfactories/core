@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "teenyfactories"
-version = "0.1.0.dev1"
+version = "1.0.0"
 description = "Multi-provider LLM and message queue abstraction for distributed agent systems"
 readme = "README.md"
 authors = [
@@ -13,7 +13,7 @@ authors = [
 license = {text = "MIT"}
 requires-python = ">=3.9"
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",

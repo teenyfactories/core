@@ -9,6 +9,6 @@ they fall back to 'dev'.
 
 import os
 
-__version__ = '0.1.0.dev1'
+__version__ = '1.0.0'
 __build_sha__ = os.environ.get('TF_BUILD_SHA') or 'dev'
 __build_date__ = os.environ.get('TF_BUILD_DATE') or 'dev'

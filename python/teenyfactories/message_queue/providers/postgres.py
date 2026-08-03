@@ -2,7 +2,7 @@
 
 Everything lives in factory_data. This provider rides the process-wide shared
 connection (``teenyfactories.db``), LISTENs the single global
-``tf_data_changed`` wake channel, and exposes plain ``ORDER BY (updated_at,
+``tf_data_changed`` wake channel, and exposes plain ``ORDER BY (state_changed_at,
 key)`` scans of a ``(collection, state)``. All dispatch/strike logic is in
 ``message_queue.base``.
 
@@ -115,7 +115,7 @@ class PostgresProvider:
         return notifications
 
     # =========================================================================
-    # Poll scans — plain (updated_at, key) FIFO, no cursor
+    # Poll scans — plain (state_changed_at, key) FIFO, no cursor
     # =========================================================================
 
     def fetch_rows(self, collection: str, state: str) -> List[dict]:
