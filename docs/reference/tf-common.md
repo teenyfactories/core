@@ -95,6 +95,7 @@ No per-row "safety re-fire" for idempotent aggregators — use `tf.on_schedule` 
 | `.do(handler)` | Register the handler. Required. |
 | `.delay(seconds=N, minutes=N, hours=N)` | Defer dispatch until `state_changed_at + delta <= NOW()`. Strict cancellation — if the row leaves the watched state before the delay elapses, the handler is skipped. Re-arm — on transition out + back in, `state_changed_at` bumps and the delay restarts. Time units are additive within a single call: `.delay(seconds=30, minutes=2)` → 2m30s. |
 | `.claim_duration(seconds=N, minutes=N, hours=N)` | How long this subscription's claim on a row stays valid if the worker dies mid-handler (default 1 hour). If the claim expires, another worker can pick the row up. Time units are additive within a single call. |
+| `.priority(n)` | Order this handler against OTHER state handlers that have rows ready in the same poll — `nice` semantics: **LOWER `n` runs sooner**, default `0`. Negative jumps ahead of the default pack (`.priority(-1)`), positive drops behind it (`.priority(5)` for background sweeps). Does NOT reorder rows *within* a handler (still oldest-first) nor scheduled jobs (those always run before state — see below). |
 
 **The poll scan.** Dispatch is a plain FIFO scan of the state — no cursor, no re-fire tracking in SQL (the strike map handles that in memory):
 
@@ -114,6 +115,8 @@ The `.delay()` variant (same state-as-queue semantics; cancellation/re-arm per t
 ```
 
 Granularity = your `run_pending()` cadence. Live and delayed handlers for the same `(collection, state)` interleave by natural `state_changed_at` order in one inline pass.
+
+**Pickup order + the scheduled-job interleave.** Each poll pass: due `tf.on_schedule` jobs run first as a block, then state handlers are served in `.priority()` order (lower `n` first; equal priority keeps registration order; rows within a handler stay oldest-first). Crucially, the scheduler is **re-run between every state row** — so a due scheduled job fires *during* a long state drain, not after it. Without this, draining a large backlog through a per-row handler would starve a scheduled job for the whole drain. Dispatch stays **cooperative on one thread**: `.priority()` decides which handler *starts* next; a handler that itself blocks (e.g. a long per-row LLM call) still holds the thread until it returns — priority never preempts a running handler. Keep long per-row handlers short or chunked.
 
 **Poll-based dispatch, NOTIFY-gated.** Dispatch is **always** poll-based — NOTIFY (see *NOTIFY channels* below) never delivers or routes work, only wakes the poll. Each `run_pending()` tick drains the NOTIFY buffer and runs a poll pass only when:
 
