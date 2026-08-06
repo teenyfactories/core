@@ -61,6 +61,7 @@ on_item_click:           # TOP-LEVEL on the component — a SIBLING of `config:`
 | `page_size` | Rows/page. |
 | `max_rows` | Cap on total rows paginated. |
 | `sort_field` / `sort_dir` | Default server sort. |
+| `empty_text` | Zero-rows message (overrides the default empty-state copy). |
 | `columns[].field` / `.label` | Dot-path into row data (nested ok, also sort key) / header text. |
 | `columns[].truncate` | Max chars, then ellipsis. |
 | `columns[].sortable: false` | Excludes column from header-click sort — for columns lacking a backing field. |
