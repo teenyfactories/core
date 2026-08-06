@@ -63,7 +63,6 @@ from teenyfactories.lifecycle import (
 )
 from teenyfactories.logging import log_debug, log_info, log_warn, log_error
 
-
 # =============================================================================
 # Provider singleton + handler registry
 # =============================================================================
@@ -132,6 +131,7 @@ def _get_provider():
     global _provider_instance
     if _provider_instance is None:
         from .providers.postgres import PostgresProvider
+
         _provider_instance = PostgresProvider()
     return _provider_instance
 
@@ -140,14 +140,20 @@ def _get_provider():
 # on_state — the only subscription API
 # =============================================================================
 
+
 class SubscriptionBuilder:
     """Fluent builder for tf.on_state(...).
 
-    Three optional chain modifiers, any order:
+    Optional chain modifiers, any order:
         @tf.on_state(collection, state).do(handler)
         @tf.on_state(collection, state).delay(seconds=N).do(handler)
         @tf.on_state(collection, state).claim_duration(hours=2).do(handler)
+        @tf.on_state(collection, state).priority(-1).do(handler)
         @tf.on_state(collection, state).delay(seconds=5).claim_duration(minutes=30).do(handler)
+
+    `.priority(n)` orders this handler against OTHER state handlers with rows
+    ready in the same poll: LOWER runs sooner, default 0, negative jumps ahead
+    (see `.priority` below). Scheduled jobs always run before state regardless.
 
     `.delay(seconds=N, minutes=N, hours=N)` defers dispatch until
     `state_changed_at + delta <= NOW()`. Strict cancellation — if the row
@@ -166,10 +172,12 @@ class SubscriptionBuilder:
 
     def __init__(self, collection: str, state: str):
         from ..claims import DEFAULT_CLAIM_DURATION_SECONDS
+
         self._collection = collection
         self._state = state
         self._delay_seconds: float = 0.0
         self._claim_duration_seconds: float = DEFAULT_CLAIM_DURATION_SECONDS
+        self._priority: int = 0
 
     def delay(self, seconds: float = 0, minutes: float = 0, hours: float = 0):
         delta = float(seconds) + float(minutes) * 60.0 + float(hours) * 3600.0
@@ -185,6 +193,18 @@ class SubscriptionBuilder:
         self._claim_duration_seconds = delta
         return self
 
+    def priority(self, n: int = 0):
+        """Order this STATE handler relative to OTHER state handlers when several
+        have rows ready in the same poll. `nice` semantics: LOWER runs sooner,
+        default 0 (normal). Negative jumps ahead of the default pack
+        (`.priority(-1)`), positive drops behind it (background sweeps). Does NOT
+        reorder scheduled jobs (they always run as a block before state, and
+        re-run between every state row) nor rows WITHIN this handler (those stay
+        oldest-first FIFO). Cooperative, not preemptive: priority picks which
+        handler starts next, it never interrupts one already running."""
+        self._priority = int(n)
+        return self
+
     def do(self, handler: Callable):
         _enqueue_registration(
             collection=self._collection,
@@ -192,6 +212,7 @@ class SubscriptionBuilder:
             handler=handler,
             delay_seconds=self._delay_seconds,
             claim_duration_seconds=self._claim_duration_seconds,
+            priority=self._priority,
         )
         return handler
 
@@ -220,18 +241,27 @@ def on_state(collection: str, state: str) -> SubscriptionBuilder:
 # Registration queue — deferred LISTEN keeps DB I/O off the import path
 # =============================================================================
 
-def _enqueue_registration(collection: str, state: str, handler: Callable,
-                          delay_seconds: float = 0.0,
-                          claim_duration_seconds: float = 3600.0):
+
+def _enqueue_registration(
+    collection: str,
+    state: str,
+    handler: Callable,
+    delay_seconds: float = 0.0,
+    claim_duration_seconds: float = 3600.0,
+    priority: int = 0,
+):
     """Queue a subscription. The LISTEN + handler-table insertion happens
     later, from inside the run_pending lifecycle (`_flush_registrations`)."""
-    _pending_registrations.append({
-        'collection':              collection,
-        'state':                   state,
-        'handler':                 handler,
-        'delay_seconds':           delay_seconds,
-        'claim_duration_seconds':  claim_duration_seconds,
-    })
+    _pending_registrations.append(
+        {
+            "collection": collection,
+            "state": state,
+            "handler": handler,
+            "delay_seconds": delay_seconds,
+            "claim_duration_seconds": claim_duration_seconds,
+            "priority": int(priority),
+        }
+    )
 
 
 def _flush_registrations():
@@ -255,10 +285,10 @@ def _flush_registrations():
 
     while _pending_registrations:
         reg = _pending_registrations.pop(0)
-        coll = reg['collection']
-        state = reg['state']
+        coll = reg["collection"]
+        state = reg["state"]
         key = (coll, state)
-        delay_seconds = reg.get('delay_seconds') or 0.0
+        delay_seconds = reg.get("delay_seconds") or 0.0
 
         if _handlers.get(key):
             log_warn(
@@ -269,19 +299,21 @@ def _flush_registrations():
                 f"Refactor to a single handler."
             )
 
-        _handlers.setdefault(key, []).append({
-            'handler':                reg['handler'],
-            'delay_seconds':          delay_seconds,
-            'claim_duration_seconds': reg.get('claim_duration_seconds') or 3600.0,
-        })
-        log_debug(
-            f"Registered handler for {coll}.{state} (delay_seconds={delay_seconds})"
+        _handlers.setdefault(key, []).append(
+            {
+                "handler": reg["handler"],
+                "delay_seconds": delay_seconds,
+                "claim_duration_seconds": reg.get("claim_duration_seconds") or 3600.0,
+                "priority": reg.get("priority") or 0,
+            }
         )
+        log_debug(f"Registered handler for {coll}.{state} (delay_seconds={delay_seconds})")
 
 
 # =============================================================================
 # Lifecycle: first-tick init + run_pending
 # =============================================================================
+
 
 def _first_tick_init():
     """One-shot bootstrap, called the first time `run_pending()` runs.
@@ -298,6 +330,7 @@ def _first_tick_init():
 
     try:
         from teenyfactories.mcp import _maybe_publish_mcp
+
         _maybe_publish_mcp()
     except Exception as e:
         log_error(f"MCP catalog publish failed (continuing): {e}")
@@ -310,9 +343,12 @@ def _log_startup_banner():
     operators don't normally need this; surfaces under --log-level=debug."""
     try:
         from teenyfactories.__version__ import (
-            __version__, __build_sha__, __build_date__,
+            __version__,
+            __build_sha__,
+            __build_date__,
         )
         from teenyfactories.config import FACTORY_NAME, AGENT_NAME
+
         log_debug(
             f"teenyfactories {__version__} "
             f"(build {__build_sha__} {__build_date__}) — "
@@ -320,6 +356,23 @@ def _log_startup_banner():
         )
     except Exception as e:
         log_error(f"startup banner failed (continuing): {e}")
+
+
+def _run_scheduled_jobs():
+    """Run all due on_schedule jobs via the native `schedule` lib, guarded.
+
+    Called at the top of each tick AND between every state row in `_poll_pass`
+    — that interleave is what lets a due scheduled job fire DURING a long state
+    drain instead of after it. Cheap when nothing is due (per-job `should_run`
+    checks, no I/O), so re-running it per row is fine. The native lib owns
+    cadence + missed-tick coalescing; we do not reorder scheduled jobs (no
+    priority among them — they run as a block before state)."""
+    import traceback as _tb
+
+    try:
+        _schedule.run_pending()
+    except Exception as e:
+        log_error(f"Scheduled job raised: {e}\n{_tb.format_exc()}")
 
 
 def run_pending():
@@ -352,11 +405,10 @@ def run_pending():
 
     import traceback as _tb
 
-    # Scheduled jobs run every tick, OUTSIDE the poll gate.
-    try:
-        _schedule.run_pending()
-    except Exception as e:
-        log_error(f"Scheduled job raised: {e}\n{_tb.format_exc()}")
+    # Scheduled jobs run every tick, OUTSIDE the poll gate — and again between
+    # every state row inside _poll_pass, so a long state drain can't starve a
+    # due on_schedule job (the fix for [tf:content-research-starves-scheduled-jobs]).
+    _run_scheduled_jobs()
 
     notify_hit = False
     try:
@@ -365,11 +417,7 @@ def run_pending():
         log_error(f"NOTIFY drain raised: {e}\n{_tb.format_exc()}")
 
     now = time.monotonic()
-    should_poll = (
-        first
-        or notify_hit
-        or (now - _last_poll_ts >= _SAFETY_POLL_INTERVAL_SEC)
-    )
+    should_poll = first or notify_hit or (now - _last_poll_ts >= _SAFETY_POLL_INTERVAL_SEC)
     if should_poll:
         # Spend-limit enforcement no longer lives at the poll gate. Cost is
         # owned by the orchestrator (computed at read; limits enforced via an
@@ -389,6 +437,7 @@ def run_pending():
     # rows whose holders died.
     try:
         from ..claims import janitor_sweep_if_due
+
         janitor_sweep_if_due()
     except Exception as e:
         log_error(f"Claim janitor raised: {e}\n{_tb.format_exc()}")
@@ -404,11 +453,12 @@ def run_pending():
 # Dispatch core — strike state machine
 # =============================================================================
 
+
 def _iso(ts) -> str:
     """Stable string form of a timestamp for the strike key."""
     if ts is None:
-        return ''
-    if hasattr(ts, 'isoformat'):
+        return ""
+    if hasattr(ts, "isoformat"):
         return ts.isoformat()
     return str(ts)
 
@@ -429,12 +479,12 @@ def _dispatch(entries: List[dict], item: dict):
     attempt didn't move it — exceptions and clean-but-no-op are counted
     identically. After _MAX_ATTEMPTS sightings the row is parked.
     """
-    coll = item.get('collection')
-    state = item.get('state')
+    coll = item.get("collection")
+    state = item.get("state")
     if coll is None or state is None:
         return
 
-    rk = (item.get('key') or '', state, _iso(item.get('state_changed_at')))
+    rk = (item.get("key") or "", state, _iso(item.get("state_changed_at")))
     n = _strikes.get(rk)
 
     if n == _PARKED:
@@ -464,10 +514,7 @@ def _dispatch(entries: List[dict], item: dict):
         _strikes[rk] = _PARKED
         _ran_keys.discard(rk)
         reason = _park_reason.pop(rk, None) or "handler did not transition the row"
-        log_error(
-            f"Giving up after {_MAX_ATTEMPTS} attempts; row parked in "
-            f"{coll}.{state} key={rk[0]!r}: {reason}"
-        )
+        log_error(f"Giving up after {_MAX_ATTEMPTS} attempts; row parked in " f"{coll}.{state} key={rk[0]!r}: {reason}")
         return
 
     _evict_strikes()
@@ -479,17 +526,19 @@ def _dispatch(entries: List[dict], item: dict):
     # FUNCTION (re-exported in __init__.py); `teenyfactories.breakpoint_mod`
     # would be cleaner but we use the explicit submodule path here instead.
     from ..breakpoint import _auto_halt as _bp_auto_halt
+
     _bp_auto_halt(coll, state, item)
 
     # Atomic claim wrap — guards against double-fire from replicas / orphan
     # pods / rolling-restart races. Always-on (not env-gated). For details
     # see core/python/teenyfactories/claims.py.
     from ..claims import try_claim, release_claim
-    row_key = item.get('key')
-    sca = item.get('state_changed_at')
+
+    row_key = item.get("key")
+    sca = item.get("state_changed_at")
 
     for entry in entries:
-        ttl = entry.get('claim_duration_seconds') or 3600.0
+        ttl = entry.get("claim_duration_seconds") or 3600.0
         if not try_claim(coll, row_key, state, sca, ttl):
             # Another worker (replica/orphan/zombie) holds the claim. Silently
             # skip — don't strike-count, because we didn't actually attempt the
@@ -501,13 +550,10 @@ def _dispatch(entries: List[dict], item: dict):
         # can tell this genuine attempt from a claim-skip (proactive-warn guard).
         _ran_keys.add(rk)
         try:
-            entry['handler'](item)
+            entry["handler"](item)
         except Exception as e:
             _park_reason[rk] = repr(e)
-            log_error(
-                f"Handler {coll}.{state} failed on key={rk[0]!r} "
-                f"attempt {attempt}/{_MAX_ATTEMPTS}: {e}"
-            )
+            log_error(f"Handler {coll}.{state} failed on key={rk[0]!r} " f"attempt {attempt}/{_MAX_ATTEMPTS}: {e}")
         finally:
             release_claim(coll, row_key, state, sca)
 
@@ -516,29 +562,48 @@ def _dispatch(entries: List[dict], item: dict):
 # Poll pass + NOTIFY drain
 # =============================================================================
 
-def _poll_pass():
-    """One inline FIFO pass over every subscribed (collection, state).
 
-    Live (non-delayed) entries share one `fetch_rows` scan. Each delayed
-    entry runs its own `fetch_due_rows` (the delay is a SQL predicate, no
-    cursor). In-retry rows interleave in natural state_changed_at position
-    (accepted head-of-line tradeoff; slow-failing handlers should set
-    their own I/O timeouts).
+def _poll_pass():
+    """One inline pass over every subscribed (collection, state), served in
+    `.priority()` order, re-running due scheduled jobs between every row.
+
+    Handler ORDER: `.priority()` nice-semantics — LOWER priority number runs
+    sooner, default 0; ties keep registration (FIFO) order via `sorted()`'s
+    stability. Scheduled jobs are NOT ordered here — `_run_scheduled_jobs()` runs
+    them as a block after each state row so a long drain can't starve a due one.
+
+    Row ORDER within a handler: unchanged — oldest first from the provider.
+    Live (non-delayed) entries share one `fetch_rows` scan. Each delayed entry
+    runs its own `fetch_due_rows` (the delay is a SQL predicate, no cursor).
+    In-retry rows interleave in natural state_changed_at position (accepted
+    head-of-line tradeoff; slow-failing handlers should set their own I/O
+    timeouts). Cooperative single thread: a handler that itself blocks still
+    holds the thread until it returns — priority picks the next unit, never
+    preempts a running one.
     """
     if not _handlers:
         return
     provider = _get_provider()
-    for (coll, state), entries in list(_handlers.items()):
-        live = [e for e in entries if not (e.get('delay_seconds') or 0.0)]
+    # Lower priority number = sooner. min() over the group is just the (single)
+    # handler's priority; sorted() is stable so equal-priority handlers keep
+    # their registration order (the FIFO tiebreak).
+    ordered = sorted(
+        _handlers.items(),
+        key=lambda kv: min((e.get("priority") or 0) for e in kv[1]),
+    )
+    for (coll, state), entries in ordered:
+        live = [e for e in entries if not (e.get("delay_seconds") or 0.0)]
         if live:
             for item in provider.fetch_rows(coll, state):
                 _dispatch(live, item)
+                _run_scheduled_jobs()  # yield to due scheduled jobs mid-drain
         for entry in entries:
-            d = entry.get('delay_seconds') or 0.0
+            d = entry.get("delay_seconds") or 0.0
             if d <= 0:
                 continue
             for item in provider.fetch_due_rows(coll, state, d):
                 _dispatch([entry], item)
+                _run_scheduled_jobs()
 
 
 def _drain_notifications() -> bool:
@@ -557,7 +622,7 @@ def _drain_notifications() -> bool:
         return False
     hit = False
     for note in notifications:
-        payload = note.get('payload') or {}
-        if isinstance(payload, dict) and payload.get('factory_name') == FACTORY_NAME:
+        payload = note.get("payload") or {}
+        if isinstance(payload, dict) and payload.get("factory_name") == FACTORY_NAME:
             hit = True
     return hit
