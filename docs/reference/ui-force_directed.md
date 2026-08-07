@@ -46,6 +46,19 @@ Click handlers activate modals by string `id` only; modal descendants read `data
 
 **Edge geometry:** `arrow_offset_start` (default `0`; source inset), `arrow_offset_end` (default `0`; target inset). `passthrough: true` ignores insets.
 
+**Stage lanes:** group nodes into ordered left→right bands. Set `stages` (under
+`config`) to `[{id, label?}]` in rank order (array order = L→R), and put
+`stage: <id>` on the node data of the nodes to lane (in the factory editor this
+is the `stage:` field on states/agents). Only nodes with a matching `stage`
+are corralled; unassigned nodes float free. Bands **auto-size** — the dashed
+boundary lines are derived from where each cluster settles, and labels pin to the
+top of the viewport centered over each band. The lane forces **ramp on only
+after the graph starts to settle** (arm-on-cool) so the layout doesn't fling.
+Tunables (defaults calibrated — rarely change): `stage_strength` (`0.05`, ==
+`edge_strength`), `stage_min_gap` (`150`, == `edge_distance`),
+`stage_arm_threshold` (`2.0`), `stage_ramp_ticks` (`45`). Presentational only —
+stages have no effect on factory runtime.
+
 **Other:** `empty_message`, `show_arrows`.
 
 ## Gotchas
@@ -54,3 +67,4 @@ Click handlers activate modals by string `id` only; modal descendants read `data
 - **Charge falloff:** `charge_max_distance` affects only repulsion, not link/center/alignment forces.
 - **Fills:** raw hex, factory-owned category palette (not theme tokens). Component chrome (grid, selection ring) uses theme.
 - **Modal ids:** `open:` must be string id only; inline object form rejected.
+- **Stages vs `align_direction`:** don't combine — both fight for x-authority. Lanes should own the x-ordering; `align_direction` is for un-staged flow graphs.
