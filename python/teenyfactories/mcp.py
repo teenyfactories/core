@@ -34,9 +34,11 @@ Order of add_mcp_server() vs add_mcp_tool() doesn't matter. The catalog row
 is written and per-tool state subscriptions are registered on the first
 `tf.run_pending()` tick.
 
-Tool names must match `^[a-zA-Z0-9_-]{1,64}$` — the name becomes a `_mcp_<name>`
-collection + NOTIFY channel and the external `<agent>_<name>` tool id, so a name
-with spaces/dots/special chars is rejected (logged as an ERROR, tool skipped).
+Tool names must match `^[a-z0-9_]{1,35}$` — the name becomes a `_mcp_<name>`
+collection (whose CHECK constraint is exactly this shape) + NOTIFY channel and
+the external `<agent>_<name>` tool id, so a name with uppercase / hyphens /
+spaces / dots / special chars, or longer than 35 chars, is rejected (logged as
+an ERROR, tool skipped).
 """
 
 import re
@@ -47,10 +49,14 @@ from .logging import log_error, log_debug
 
 # A tool name becomes a `_mcp_<name>` collection, a Postgres NOTIFY channel, and
 # a closure key — and the orchestrator composes the external tool name as
-# `<agent>_<name>`, which MUST match ^[A-Za-z0-9_-]{1,64}$. A name with spaces,
-# dots, or other special chars silently corrupts the channel and breaks the
-# tool, so registration rejects anything that doesn't match. Compiled once.
-_TOOL_NAME_PATTERN = r'^[a-zA-Z0-9_-]{1,64}$'
+# `<agent>_<name>`, which MUST match ^[A-Za-z0-9_-]{1,64}$. We constrain the name
+# to the STRICTER shape the `_mcp_<name>` collection CHECK already enforces
+# (lowercase alnum + underscore, ≤35) so a name that registers here can never be
+# listed-but-uncallable: previously `[a-zA-Z0-9_-]{1,64}` let a name like
+# `Query-Spend` into the catalog, then the `_mcp_Query-Spend` write failed the DB
+# CHECK at invoke time. A name with uppercase, hyphens, spaces, dots, or other
+# special chars — or over 35 chars — is rejected. Compiled once.
+_TOOL_NAME_PATTERN = r'^[a-z0-9_]{1,35}$'
 _TOOL_NAME_RE = re.compile(_TOOL_NAME_PATTERN)
 
 # Module-level registry
@@ -88,7 +94,7 @@ class McpToolBuilder:
     def do(self, handler: Callable):
         """Register the handler function for this tool.
 
-        The tool `name` must match `^[a-zA-Z0-9_-]{1,64}$`. `.do()` is the
+        The tool `name` must match `^[a-z0-9_]{1,35}$`. `.do()` is the
         commit point (where the tool lands in the catalog + gets its state
         subscription), so the guard lives here: a bad name never registers.
         """
@@ -100,8 +106,8 @@ class McpToolBuilder:
         if not isinstance(self._name, str) or not _TOOL_NAME_RE.match(self._name):
             log_error(
                 f"🔨 Rejected MCP tool name {self._name!r}: must match "
-                f"{_TOOL_NAME_PATTERN} (letters, digits, underscore, hyphen; "
-                f"1-64 chars). Tool NOT registered."
+                f"{_TOOL_NAME_PATTERN} (lowercase letters, digits, underscore; "
+                f"1-35 chars). Tool NOT registered."
             )
             return handler
         tool = {
@@ -120,10 +126,11 @@ class McpToolBuilder:
 def add_mcp_tool(name: str, description: str) -> McpToolBuilder:
     """Register an MCP tool. Call before or after add_mcp_server() — order doesn't matter.
 
-    `name` must match `^[a-zA-Z0-9_-]{1,64}$` (letters, digits, underscore,
-    hyphen; 1-64 chars). It becomes a `_mcp_<name>` collection + Postgres NOTIFY
-    channel and is composed into the external tool name `<agent>_<name>`, so a
-    name with spaces / dots / special chars would corrupt the channel. A name
+    `name` must match `^[a-z0-9_]{1,35}$` (lowercase letters, digits,
+    underscore; 1-35 chars). It becomes a `_mcp_<name>` collection + Postgres
+    NOTIFY channel and is composed into the external tool name `<agent>_<name>`,
+    so a name with uppercase / hyphens / spaces / dots / special chars would
+    corrupt the channel or fail the collection's CHECK at invoke time. A name
     that fails validation is logged as an ERROR to factory_logs at `.do()` time
     and the tool is NOT registered (the agent keeps running).
     """
