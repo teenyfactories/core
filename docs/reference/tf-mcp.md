@@ -22,11 +22,13 @@ tf.add_mcp_tool('tool_name', 'Description for the LLM') \
     .with_annotations({"readOnlyHint": True, "openWorldHint": False}) \
     .do(my_handler)
 
-# Tool NAME must match ^[a-zA-Z0-9_-]{1,64}$ — it becomes the `_mcp_<name>`
-# collection + a Postgres NOTIFY channel, so spaces/dots/other chars would
-# corrupt it. A bad name is REJECTED at .do(): the tool is skipped and an
-# ERROR row is written to factory_logs (the agent's other valid tools keep
-# working). Use snake_case, verb-first (query_spend, search_claims).
+# Tool NAME must match ^[a-z0-9_]{1,35}$ (lowercase letters, digits, underscore;
+# 1-35 chars) — it becomes the `_mcp_<name>` collection (whose CHECK constraint is
+# exactly this shape) + a Postgres NOTIFY channel, so uppercase/hyphens/spaces/
+# dots would corrupt it or fail the CHECK at invoke time. A bad name is REJECTED
+# at .do(): the tool is skipped and an ERROR row is written to factory_logs (the
+# agent's other valid tools keep working). Use snake_case, verb-first
+# (query_spend, search_claims).
 
 # Order of add_mcp_server() vs add_mcp_tool() doesn't matter.
 # On the first tf.run_pending() tick, the core:
