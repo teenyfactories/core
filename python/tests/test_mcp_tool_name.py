@@ -1,7 +1,9 @@
 """Unit tests for MCP tool-name validation (teenyfactories.mcp).
 
 A tool name becomes a `_mcp_<name>` collection + Postgres NOTIFY channel and the
-external `<agent>_<name>` tool id (must match ^[A-Za-z0-9_-]{1,64}$). Registration
+external `<agent>_<name>` tool id. Registration constrains it to the STRICTER
+shape the `_mcp_<name>` collection CHECK enforces — ^[a-z0-9_]{1,35}$ — so a name
+can never register here yet fail the DB CHECK at invoke time. Registration
 must REJECT a name that doesn't match: log an ERROR to factory_logs and NOT land
 the tool in the catalog. These are pure-function tests — `mcp.log_error` is
 monkeypatched to capture messages, and the module registry is reset per-test, so
@@ -36,10 +38,10 @@ def _register(name):
 class TestValidNames:
     @pytest.mark.parametrize('name', [
         'query_spend',
-        'ingest-transcript',
-        'A',
-        'Tool_123',
-        'x' * 64,                     # exactly the 64-char cap
+        'ingest_transcript',
+        'a',
+        'tool_123',
+        'x' * 35,                     # exactly the 35-char cap
     ])
     def test_valid_name_registers(self, name, _reset_registry):
         _register(name)
@@ -62,8 +64,10 @@ class TestInvalidNames:
         'has space',                  # space
         'has.dot',                    # dot
         '',                           # empty
-        'x' * 65,                     # over the 64-char cap
+        'x' * 36,                     # over the 35-char cap
         'path/slash',                 # slash
+        'Upper',                      # uppercase (now rejected)
+        'has-hyphen',                 # hyphen (now rejected — fails the DB CHECK)
     ])
     def test_invalid_name_rejected(self, name, _reset_registry):
         _register(name)
@@ -74,7 +78,7 @@ class TestInvalidNames:
         assert len(_reset_registry) == 1
         msg = _reset_registry[0]
         assert repr(name) in msg
-        assert '[a-zA-Z0-9_-]{1,64}' in msg
+        assert '[a-z0-9_]{1,35}' in msg
 
     def test_do_still_returns_handler_on_rejection(self):
         def handler(params):
