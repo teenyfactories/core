@@ -63,7 +63,7 @@ Subscribing to `(collection, state)` means *"process every row currently in that
 
 **One handler per `(collection, state)` — subscriptions are UNIQUE across the whole factory.** Exactly one `.do` handler may subscribe any given `(collection, state)`. Do NOT wire two handlers (in the same agent OR in two different agents) to the same state:
 
-- *Same process (one agent, two `.do`s):* strike/retry accounting is per-row, not per-handler, so both handlers duplicate-execute the succeeding one — core logs a loud `[WARN]` at registration.
+- *Same process (one agent, two `.do`s):* strike/retry accounting is per-row, not per-handler, so both handlers duplicate-execute the succeeding one — core logs a `[WARN]` at registration.
 - *Different agents/processes:* each dispatch is wrapped in a claim (`try_claim`/`release_claim`, see the claims layer), and **only ONE worker can claim each row**. Which agent's handler wins is non-deterministic; the loser silently skips. There is no cross-process warning — each process only sees its own subscriptions — so this stays invisible until rows go missing.
 
 To have several things happen when a row reaches a state, **fan the work out to DISTINCT next-states**: one handler advances `Order: Paid` → writes `Order: Invoiced` AND `Order: Shipped` (or a fan-out collection), and a separate handler subscribes each of those. Never model "two workers on one queue" by double-subscribing one state. `check_all` reports any `(collection, state)` subscribed by 2+ agents as an ERROR; `check_python` flags a single agent that subscribes one state twice.
@@ -116,7 +116,7 @@ The `.delay()` variant (same state-as-queue semantics; cancellation/re-arm per t
 
 Granularity = your `run_pending()` cadence. Live and delayed handlers for the same `(collection, state)` interleave by natural `state_changed_at` order in one inline pass.
 
-**Pickup order + the scheduled-job interleave.** Each poll pass: due `tf.on_schedule` jobs run first as a block, then state handlers are served in `.priority()` order (lower `n` first; equal priority keeps registration order; rows within a handler stay oldest-first). Crucially, the scheduler is **re-run between every state row** — so a due scheduled job fires *during* a long state drain, not after it. Without this, draining a large backlog through a per-row handler would starve a scheduled job for the whole drain. Dispatch stays **cooperative on one thread**: `.priority()` decides which handler *starts* next; a handler that itself blocks (e.g. a long per-row LLM call) still holds the thread until it returns — priority never preempts a running handler. Keep long per-row handlers short or chunked.
+**Pickup order + the scheduled-job interleave.** Each poll pass: due `tf.on_schedule` jobs run first as a block, then state handlers are served in `.priority()` order (lower `n` first; equal priority keeps registration order; rows within a handler stay oldest-first). The scheduler is **re-run between every state row** — so a due scheduled job fires *during* a long state drain, not after it. Without this, draining a large backlog through a per-row handler would starve a scheduled job for the whole drain. Dispatch stays **cooperative on one thread**: `.priority()` decides which handler *starts* next; a handler that itself blocks (e.g. a long per-row LLM call) still holds the thread until it returns — priority never preempts a running handler. Keep long per-row handlers short or chunked.
 
 **Poll-based dispatch, NOTIFY-gated.** Dispatch is **always** poll-based — NOTIFY (see *NOTIFY channels* below) never delivers or routes work, only wakes the poll. Each `run_pending()` tick drains the NOTIFY buffer and runs a poll pass only when:
 
@@ -182,7 +182,7 @@ Both channels share the same payload shape. Factory authors never deal with chan
 
 **Naming hygiene**: factory and collection names are validated `^[a-z][a-z0-9_-]{0,29}$` at create time (URL/dataRef/log-line/chat-tool sanity). **At runtime, tf also validates every collection AND state identifier** — the args to `tf.collection(name)` / `tf.on_state(collection, state)` and every `state=` / `.state(...)` value — against `^[a-z0-9_]+$` (≤40 chars), raising `ValueError` on the first offending call (note: a **hyphen** passes the create-time check but fails here, as do capitals and spaces). factory.yml carries the Title-Case `"Collection: State"` **display label**; agent code and UI bindings use the lowercase **runtime slug** (`"Email: Sent"` → `tf.on_state('email', 'sent')`, `tf.collection('email')`, `state='sent'`). Mapping rule + worked example: see factory-yaml. `check_python` flags Title-Case/spaced string literals in these positions before deploy.
 
-There is no message-bus primitive — pure aggregation/summarisation is a scheduled recompute (`tf.on_schedule`) overwriting a fixed-key stats row, never re-dispatch on an unchanged row. **One handler per `(collection, state)`** — a second registration emits a loud `[WARN]` (strike accounting is per-row, so two handlers would silently duplicate-execute the succeeding one).
+There is no message-bus primitive — pure aggregation/summarisation is a scheduled recompute (`tf.on_schedule`) overwriting a fixed-key stats row, never re-dispatch on an unchanged row. **One handler per `(collection, state)`** — a second registration emits a `[WARN]` (strike accounting is per-row, so two handlers would silently duplicate-execute the succeeding one).
 
 ## Scheduling
 
@@ -375,8 +375,8 @@ Every agent `.py` file MUST start with a docstring of this exact shape:
 Agent: {Name}
 
 Purpose: {brief}
-Triggers: {what wakes this up — states, messages, schedules}
-Outputs: {what it produces — states it transitions, topics it sends}
+Triggers: {what wakes this up — states, schedules}
+Outputs: {what it produces — states it transitions}
 """
 ```
 
@@ -430,8 +430,8 @@ LISTEN tf_logs_changed;
 Agent: {Name}
 
 Purpose: {What this agent does}
-Triggers: {What states/messages/schedules trigger it}
-Outputs: {What collections/states/topics it writes}
+Triggers: {What states/schedules trigger it}
+Outputs: {What collections/states it writes}
 """
 
 import teenyfactories as tf

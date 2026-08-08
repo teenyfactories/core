@@ -393,7 +393,7 @@ The DataRef root is both the form-binding namespace (`field: notes`) and the `$:
 
 #### `data` — the one prefix that always resolves
 
-Every leaf that fires a handler names the thing that was clicked, but each used to name it after **itself**: a table published `row`, a `scatter` `point`, a `force_directed` `node`, a card/button nothing at all (the DataRef snapshot was passed bare). So `$: row.title` was correct on a table row click and silently `undefined` on a kanban card — the single most common authoring trap in this surface.
+Every leaf that fires a handler names the thing that was clicked, but each used to name it after **itself**: a table published `row`, a `scatter` `point`, a `force_directed` `node`, a card/button nothing at all (the DataRef snapshot was passed bare). So `$: row.title` was correct on a table row click and silently `undefined` on a kanban card — a frequent source of confusion in this surface.
 
 `data` is now published alongside whatever the leaf calls it, in both places a subject appears:
 

@@ -55,13 +55,14 @@ on_item_click:           # TOP-LEVEL on the component — a SIBLING of `config:`
 
 ## Config keys
 
-| Key | Effect |
-|---|---|
-| `key_field` | Row dedup key. |
-| `page_size` | Rows/page. |
-| `max_rows` | Cap on total rows paginated. |
-| `sort_field` / `sort_dir` | Default server sort. |
-| `empty_text` | Zero-rows message (overrides the default empty-state copy). |
+| Key | Default | Effect |
+|---|---|---|
+| `key_field` | `id` | Row dedup key. |
+| `page_size` | `50` | Rows/page. |
+| `max_rows` | `100` | Cap on total rows paginated. |
+| `sort_field` | `null` | Default server sort field. |
+| `sort_dir` | `asc` | Sort direction (`asc` or `desc`). |
+| `empty_text` | — | Zero-rows message (overrides the default empty-state copy). |
 | `columns[].field` / `.label` | Dot-path into row data (nested ok, also sort key) / header text. |
 | `columns[].truncate` | Max chars, then ellipsis. |
 | `columns[].sortable: false` | Excludes column from header-click sort — for columns lacking a backing field. |

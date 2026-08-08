@@ -85,9 +85,10 @@ Slot-aware: children may carry `slot: header|body|footer` (default `body`; legac
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `width` | CSS length | — | e.g. `720px`, `100%`. |
-| `max_height` | CSS length | — | e.g. `80vh`. |
-| `min_height` | CSS length | — | e.g. `400px`. |
+| `width` | CSS length | `600px` | e.g. `720px`, `100%`. |
+| `max_width` | CSS length | `90vw` | Maximum modal width, viewport-relative. |
+| `max_height` | CSS length | `80vh` | e.g. `80vh`. |
+| `min_height` | CSS length | theme-dependent | e.g. `400px`. Falls back to theme token if unset. |
 | `height` | CSS length | `auto` | e.g. `auto`, `80vh`. |
 | `show_close_button` | bool | `true` | X button in header. |
 | `close_on_escape` | bool | `true` | Press Escape to close. |
