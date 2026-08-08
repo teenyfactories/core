@@ -32,6 +32,7 @@ answer = (
 | `.max_tokens(n)` | Output token cap. Single-shot `.ask*` omits it for provider default. **Agentic loop applies 8192 default** to avoid truncation. |
 | `.system(text)` | System prompt (literal). |
 | `.with_structured_output(Model)` | Return parsed Pydantic instance instead of text. |
+| `.with_extra_body(params)` | Merge extra request-body attributes (OpenAI-compatible providers: openai/openrouter/digitalocean only). Others log a warning and ignore it. |
 
 ### Terminals (eager)
 

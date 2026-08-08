@@ -5,7 +5,7 @@ This page gets you from zero to a running factory. You can run a factory two way
 ## Prerequisites
 
 - **Docker** + **Docker Compose** — every agent runs as a container.
-- **Python 3.11+** — only if you want to develop/lint agent code locally (the runtime is the container image).
+- **Python 3.9+** — only if you want to develop/lint agent code locally (the runtime is the container image).
 - An **LLM provider key** for any agent that calls `tf.llm()` (OpenAI, Anthropic, Google, Azure Bedrock, or a local Ollama).
 
 ## Install the library
@@ -20,7 +20,7 @@ You rarely install it by hand for running factories — the agent base image `gh
 
 ## The agent base image
 
-Every agent container runs on `ghcr.io/teenyfactories/agent:dev`, which has the library and all Python dependencies baked in. Your agent script is mounted at `/app/script.py`; nothing else mounts by default. So agent containers start fast and your factory repo stays tiny (no `requirements.txt`, no build step for the common case).
+Every agent container runs on `ghcr.io/teenyfactories/agent:<tag>` (default `:latest`, configurable via `DEFAULT_AGENT_IMAGE` env var), which has the library and all Python dependencies baked in. Your agent script is mounted at `/app/script.py`; nothing else mounts by default. So agent containers start fast and your factory repo stays tiny (no `requirements.txt`, no build step for the common case).
 
 ## Create a factory
 
