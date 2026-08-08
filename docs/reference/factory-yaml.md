@@ -28,7 +28,6 @@ base_image: ghcr.io/...              # optional factory-level image override; fa
 volumes: [...]                       # optional; see Volumes below
 states: {...}                        # "Collection: State" keyed map; see States below
 agents: {...}                        # slug-keyed map; see Agents below
-stages: [...]                        # optional; ordered editor-graph lanes; see Stages below
 default_ui:                          # optional; the Composable UI (read_reference_ui)
   layout: {...}                      #   the single root component tree
   modals: [...]                      #   optional; page-level keyed modals opened by id
@@ -89,7 +88,7 @@ states:
 | `description` | string | Human/LLM-facing description of what a row in this state means. |
 | `schema` | object | A JSON-schema describing the row's `data` payload. Accepted as any object — its internals are not validated. |
 | `manual_transition_states` | list of `"Collection: State"` | The states a human may move a row in THIS state to. Presence of this list is what makes a state **human-in-the-loop** — the UI renders a transition button per target. |
-| `stage` | string | Optional editor-graph lane id — must reference a top-level `stages[].id` (see Stages). Presentational only; no runtime effect. Omit to leave the state un-laned. |
+| `stage` | string | Optional free-text editor-graph lane tag (see Stage lanes). The editor discovers lanes from the distinct tag values. Presentational only; no runtime effect. Omit to leave the state un-laned. |
 
 **`manual_transition_states` lives on the SOURCE state**, not on an agent. A state
 with a `manual_transition_states` list is a step a *human* drives (via the UI's
@@ -181,7 +180,7 @@ agents:
 | `base_image` | string | Per-agent container image override. Fallback chain: agent `base_image` → factory `base_image` → `DEFAULT_AGENT_IMAGE` → `ghcr.io/teenyfactories/agent:latest`. |
 | `environment` | object | Per-agent environment variables passed into the container. |
 | `volumes` | list | Per-agent volume attachments (see Volumes › Attachments). |
-| `stage` | string | Optional editor-graph lane id — must reference a top-level `stages[].id` (see Stages). Presentational only; no runtime effect. Omit to leave the agent un-laned. |
+| `stage` | string | Optional free-text editor-graph lane tag (see Stage lanes). The editor discovers lanes from the distinct tag values. Presentational only; no runtime effect. Omit to leave the agent un-laned. |
 
 `input_states` / `output_states` are **wiring metadata** — they document the
 topology and drive the editor graph. The runtime subscription is whatever the
@@ -193,40 +192,39 @@ structural category. The folder layout is `factory.yml` + `agents/*.py`. No
 `workers/`, no `common/`. For the required agent-file docstring shape and the main
 loop, see the tf reference (`read_reference_tf`).
 
-## Stages
+## Stage lanes
 
-`stages:` is an **optional, ordered** list of named lanes for the factory-editor
-graph. It is **purely presentational** — stages have no effect on runtime,
-execution, or data. They let you group states/agents into left→right bands so a
-busy graph reads as a flow instead of a hairball.
+Stages group states/agents into vertical bands in the factory-editor graph so a
+busy graph reads as a flow instead of a hairball. They are **purely
+presentational** — no effect on runtime, execution, or data.
+
+There is **no top-level list**. A state or agent opts into a lane with a
+free-text `stage:` tag; the editor **discovers** the set of lanes from the
+distinct tag values across the graph. Lane **order is emergent** — left→right by
+where each cluster settles, following the graph's flow — so you reorder lanes by
+dragging a node, not by editing a list.
 
 ```yaml
-stages:                              # ARRAY ORDER = left→right band order
-  - id: ingest                       # required; referenced by state/agent `stage:`
-    label: Ingest                    # optional display label (defaults to id)
-  - id: normalise
-  - id: enrich
-    label: Enrich
-
 states:
   "Trade: Raw - FX":
-    stage: ingest                    # opt into a lane
+    stage: Ingest                    # free-text lane tag
 
 agents:
   normaliser:
-    stage: normalise
+    stage: Normalise                 # nodes sharing a tag cluster into one lane
+  reporter:
+    stage: Report
 ```
 
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `id` | string (required) | Lane identifier referenced by a state/agent `stage:`. Must be unique — a duplicate id is a hard error. |
-| `label` | string | Display label shown above the lane. Defaults to `id`. |
-
 Rules:
-- **Array order is the band order** (left → right). Reorder the array to reorder lanes.
-- A state/agent opts into a lane with `stage: <id>`. **Unassigned nodes float freely** — they are not corralled into any lane.
-- A `stage:` that names an undeclared id is a **warning, not an error** (the editor adds the stages entry automatically when you assign a node; an un-declared ref simply won't render as a lane).
-- Both `stages:` and node `stage:` are optional — a factory with neither is unaffected.
+- A node joins a lane by matching another node's `stage:` string exactly (the tag
+  IS the lane label). **Untagged nodes float freely** — not corralled.
+- The set of lanes is whatever distinct `stage:` values exist; a tag no other node
+  shares is simply a one-node lane. There is no "undeclared" tag to warn about.
+- Order follows the graph — each lane keeps its natural width and a gentle
+  separation holds a gap between neighbours; drag a node past a neighbour to
+  reorder them.
+- `stage:` is optional — a factory with no tags is unaffected.
 
 ## Volumes
 
