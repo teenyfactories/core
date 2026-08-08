@@ -57,26 +57,30 @@ free. `lane_x_field` is the only required key to enable X lanes; the rest defaul
 | key | default | meaning |
 |---|---|---|
 | `lane_x_field` | `null` | node.data field for X bands; `null` = X lanes off |
-| `lane_x_strength` | `0.05` | X separation gain (== `edge_strength`) |
-| `lane_x_min_gap` | `150` | min px between adjacent X bands (== `edge_distance`) |
+| `lane_x_force_k` | `1500` | X wall-barrier strength (inverse-square coefficient); bigger = wider standoff gap |
+| `lane_x_force_cap` | `12` | X wall-barrier force cap; bigger = harder to drag a lane across (reorder) |
 | `lane_x_label_pos` | `top` | X label edge: `top` \| `bottom` |
 | `lane_y_field` | `null` | node.data field for Y bands; `null` = Y lanes off |
-| `lane_y_strength` | `0.05` | Y separation gain |
-| `lane_y_min_gap` | `150` | min px between adjacent Y bands |
+| `lane_y_force_k` | `1500` | Y wall-barrier strength |
+| `lane_y_force_cap` | `12` | Y wall-barrier force cap |
 | `lane_y_label_pos` | `left` | Y label edge: `left` \| `right` |
 
-Band **order is emergent** — by where each cluster settles along the axis. Bands
-keep their **natural width**: there is no centroid pull. A whole-band
-**separation** holds `min_gap` between neighbours, and a short-range inward
-**line-wall** near each divider stops a node bleeding across — but the band
-interior is force-free, so a wide cluster settles wide. Dragging a node past a
-neighbour **reorders the bands** with no snap-back (order hysteresis prevents
-flicker). Bands **auto-size** — the dotted boundary lines are derived divider
-lines at the robust-band gap midpoints; labels pin to the viewport edge, centred
-between each band's lines. Forces are 1-D per axis and independent (so the matrix
-falls out of running both), and apply at full strength from tick 0. Convergence
-needs the tags roughly compatible with the links: tags that fight the edge
-structure (a band whose members' links pull them elsewhere) never settle.
+Band **order is emergent** — by where each cluster settles along the axis; a lane
+reorders only when its whole cluster's centre passes a neighbour's (order
+hysteresis prevents flicker). Between the ordered lanes sit **n-1 walls** —
+first-class sim bodies (position + velocity). A node feels a short-range
+**inverse-square repulsion** from each of its two bounding walls; the
+equal-and-opposite recoil moves the wall, so each wall **self-positions** into the
+gap between the innermost nodes of its two lanes. The barrier climbs steeply as a
+node nears a wall — a natural standoff **gap** opens (`force_k` sets its width) —
+but is **capped** (`force_cap`), so a hard drag punches a node through. The walls
+are free to **cross**: when two invert, the lanes they divide **swap** (no
+snap-back). Lane interiors are force-free, so a wide cluster stays wide. The dashed
+boundary lines ARE the wall bodies; labels pin to
+the viewport edge, centred in each lane. Forces are 1-D per axis and independent
+(so the matrix falls out of running both), applied from tick 0 (no ramp).
+Convergence needs the tags roughly compatible with the links: tags that fight the
+edge structure (a lane whose members' links pull them elsewhere) never settle.
 Presentational only — lanes have no effect on factory runtime.
 
 In the factory editor, X lanes are wired to the state/agent `stage:` field

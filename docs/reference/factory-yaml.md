@@ -148,7 +148,7 @@ instead of crashing a container.
 
 ## Agents
 
-`agents:` is a map keyed by **slug** (lowercase letters, digits, underscores, hyphens). The slug IS the
+`agents:` is a map keyed by **slug** (lowercase letters, digits, underscores only). The slug IS the
 script filename: `agents/{slug}.py`. There is no `script:` override — the Python
 file is the agent.
 
