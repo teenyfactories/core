@@ -651,7 +651,7 @@ All backing data lives in `factory_data`. Writes fan out: Postgres NOTIFY `{fact
 
 ## Theme
 
-Components use CSS custom properties for chrome (backgrounds, text, borders, status colours, focus rings); factory-passed palettes (e.g. `scatter.color_map`) may be raw hex. App-global tokens (set at orchestrator boot from `THEME_*` env vars): Brand `--primary-50`…`--primary-900`, `--secondary-50`…`--secondary-900`, `--tertiary-50`…`--tertiary-900`; Status `--success-500`/`--warning-500`/`--error-500`/`--info-500` (+ 50–900 variants); Surface `--bg-primary`/`--bg-secondary`/`--bg-tertiary`; Text `--text-primary`/`--text-secondary`/`--text-muted`; Border `--border-color`. Use inside a top-level `style:` block (or a dynamic JSONata-evaluated style value):
+Components use CSS custom properties for chrome (backgrounds, text, borders, status colours, focus rings); factory-passed palettes (e.g. `scatter.color_map`) may be raw hex. App-global tokens (set at orchestrator boot from `THEME_*` env vars): Brand `--primary-50`…`--primary-900`; Status `--success-50`/`--warning-50`/`--error-50`/`--info-50` and `--success-500`/`--warning-500`/`--error-500`/`--info-500` (+ 50–900 variants); Surface `--bg-primary`/`--bg-secondary`/`--bg-tertiary`; Text `--text-primary`/`--text-secondary`/`--text-muted`; Border `--border-color`. Use inside a top-level `style:` block (or a dynamic JSONata-evaluated style value):
 
 ```yaml
 - component: metrics
