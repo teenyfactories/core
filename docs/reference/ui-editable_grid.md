@@ -240,5 +240,5 @@ config:
 - Axis entries added at runtime are local until a cell is written for them.
 - `remove` clears cells, it does **not** delete the axis's identity row — on a `source: collection` axis the entry stays visible and empty. Want it gone? Pivot the axis off the cells (`source: distinct`).
 - `remove` on `cell_object` deletes by each cell row's own key, so a changed `cells.key` expression never leaves rows it can no longer name.
-- `derived` and `editable_when` use the `$:` subset (see **ui-common**) — no higher-order functions, no cross-cell references beyond `{row, column, value}`.
+- `derived` and `editable_when` use `$:` JSONata (see **ui-common**) evaluated against `{row, column, value}` — no cross-cell references beyond those three.
 - Wide grids scroll horizontally inside the component; the row-label column is sticky.
