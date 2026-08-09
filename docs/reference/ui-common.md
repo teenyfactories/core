@@ -123,7 +123,7 @@ snake_case in YAML (`x_field`, `page_size`, `read_only`); PascalCase for JS comp
 
 ### Canonical keys (current)
 
-These leaf-specific keys are canonical as written, no alternate spellings exist: `color_map`; `mode: "compact"|"default"` (`container_status`); `show_close_button` / `show_quadrants` (`modal` / `scatter`); `edge_distance`/`edge_strength`/`edge_bundling`/`edge_bundling_offset`/`edge_bundling_min_offset`/`edge_anchor_center` (`force_directed` — d3-internal names stay `link*`); row-click detail via top-level `on_item_click.detail_modal` (`table`); fire-and-forget signals via array-form `on_click` writing a domain collection with `key: $uuid`; flat-collection `tree_editor` with a `parent_id` field, internal `save_data_item`/`delete_data_item` dispatch. Also fixed by design: `code_editor.theme: "vs-dark"|"light"`; Table column `type: "tags"` (scope-polymorphic `type:` at column level is fine — only the top-level `type:` was replaced by `component:`); `text_input.type: "email"|"password"|"number"|"text"`.
+These leaf-specific keys are canonical as written, no alternate spellings exist: `color_map`; `mode: "compact"|"default"` (`container_status`); `show_close_button` / `show_quadrants` (`modal` / `scatter`); `edge_distance`/`edge_strength`/`bundle_links`/`bundle_bezier_offset`/`bundle_bezier_min_offset`/`bundle_bezier_fan_bias`/`edge_anchor_center` (`force_directed` — d3-internal names stay `link*`); row-click detail via top-level `on_item_click.detail_modal` (`table`); fire-and-forget signals via array-form `on_click` writing a domain collection with `key: $uuid`; flat-collection `tree_editor` with a `parent_id` field, internal `save_data_item`/`delete_data_item` dispatch. Also fixed by design: `code_editor.theme: "vs-dark"|"light"`; Table column `type: "tags"` (scope-polymorphic `type:` at column level is fine — only the top-level `type:` was replaced by `component:`); `text_input.type: "email"|"password"|"number"|"text"`.
 
 ## Layout & responsive
 
@@ -448,13 +448,15 @@ It is **read-only, enforced**: the object is deep-frozen and the key is non-writ
 | Field access — bare name + dotted path | Variable bindings `:=` |
 | String concat `&` | Statement blocks `;` |
 | Compare `= != < <= > >=` | Array transforms/map/reduce/lambdas |
-| Arithmetic `+ - * /`, unary `-` | Predicates/filters `a[pred]`, regex |
+| Arithmetic `+ - * /`, unary `-` | Regex matchers, `~>` chaining |
 | Logical `and`/`or`/`not` | `$` root sigil / `$$` root-array sigil |
 | Ternary `cond ? then : else` | Higher-order functions |
-| Builtins — the 12 in the table below | Any other builtin |
+| Array index `arr[N]` — **literal N only** (`arr[0]`, `arr[-1]`) | Computed index `arr[1+1]` / `arr[$i]` — **filters, does NOT index** (see below) |
+| Predicate filter `arr[pred]` — per-item boolean | Order-by `^( )`, group-by `{ }`, wildcards `* **` |
+| Builtins — the 13 in the table below | Any other builtin |
 | Names `[a-zA-Z_][a-zA-Z0-9_]*` | Backtick-quoted names `` `some-key` `` — so **hyphenated keys are unreachable** (see below) |
 
-**The builtin library is 12 functions and only these 12.** Anything else (`$sum`, `$map`, `$now`, `$formatNumber`, …) is not implemented and the expression fails silently.
+**The builtin library is 13 functions and only these 13.** Anything else (`$sum`, `$map`, `$now`, `$formatNumber`, …) is not implemented and the expression fails silently.
 
 | Builtin | Notes |
 |---|---|
@@ -463,10 +465,34 @@ It is **read-only, enforced**: the object is deep-frozen and the key is non-writ
 | `$string(x)` | `null` / absent → `""` |
 | `$number(x)` `$boolean(x)` `$not(x)` | `$number(null / absent)` → same out; `$number("abc")` → `NaN` |
 | `$length(x)` | string or array length; anything else → `0`. Deliberately does **not** pass absent through — `$length(missing)` is `0`, so `$length(missing) + 1` is `1` |
+| `$count(x)` | sequence cardinality: array → its length, absent/`null` → `0`, any other single value → `1`. Contrast `$length`: `$count("abc")` is `1` (one string), `$length("abc")` is `3` (three chars) |
 | `$round(x)` `$round(x, precision)` | `precision` = digits after the decimal point, default `0`, **may be negative** (`$round(1234, -2)` → `1200`). Uses JSONata's **round-half-to-even** (banker's rounding): `$round(0.5)` → `0`, `$round(1.5)` → `2`, `$round(2.5)` → `2` — not `Math.round`'s half-away-from-zero |
 | `$floor(x)` `$ceil(x)` `$abs(x)` | |
 
 **An absent operand makes the whole arithmetic expression absent.** `+ - * /` and unary `-` propagate a missing (or `null`) field the way the spec does: the result is `undefined`, propagation is transitive through nesting and through the numeric builtins, and `&`-concat then drops it. So a row with no `headroom_aud` renders `Room left: $m`, not `Room left: $NaNm`. The numeric builtins behave the same way, so `$string($round(missing))` is `""` and never an error. (`%` modulo is not part of the subset at all — it does not lex.)
+
+#### Array indexing & predicate filtering
+
+A postfix `expr[ inner ]` (chainable, freely interleaved with `.` — `a.b[0].c`) does one of **two** things, decided by what `inner` is:
+
+| `inner` is… | Branch | Behaviour |
+|---|---|---|
+| a **numeric literal** (or unary-minus numeric — `[0]`, `[-1]`) | **positional index** | Target wrapped as `[target]` when not already an array. Negative counts from the end (`[-1]` = last). Out-of-range, or indexing absent/`null`, → `undefined`. A non-integer literal (`arr[1.5]`) is a JS lookup → `undefined`. |
+| **anything else** (`kind = 'x'`, `n > 0`, a bare field, …) | **per-item filter** | Target wrapped as an array; `inner` is evaluated with **each item as the context** (bare names and `data.` resolve against that item); truthy items kept. Collapses per jsonata: **0 kept → `undefined`, 1 kept → the item itself (not a 1-array), ≥2 → an array**. |
+
+```yaml
+# index
+label: "$: rows[0].name"          # first row's name
+label: "$: rows[-1].name"         # last row's name
+# filter (edges whose target node is a state), then take the first
+value: "$: source_edges[target.data.type = 'state'][0].id"
+# count the matches (filter → $count)
+label: "$: $count(rows[status = 'open']) & ' open'"
+```
+
+> ⚠️ **Deliberate subset — a COMPUTED index filters, it does not index.** Only a **literal** index positions; runtime-computed indices are not supported. `arr[1+1]` is an arithmetic expression, not a literal, so it takes the **filter** branch — `2` is truthy for every item, so the WHOLE array comes back, not element 2. Same for `arr[$i]` (a number variable) and `arr[true]`. If you need the Nth element, the index must be a literal in the YAML. This is a known scoped gap, not a bug.
+
+> ⚠️ **`.field` after a filter only reads through when the filter collapses to ONE item.** `nodes[pred].id` gives the id when exactly one node matches, but `undefined` when **two or more** match — a filter that keeps ≥2 stays an array, and `.field` on an array is a plain property lookup with no auto-mapping (mapping `.` over a sequence is not in the subset). The behaviour therefore flips with the data. To read a field off a possibly-multi match, index first (`nodes[pred][0].id`).
 
 **Hyphenated keys are unreachable — `$: data.some-key` cannot be written.** A name is `[a-zA-Z_][a-zA-Z0-9_]*`, with no hyphen, so `data.some-key` lexes as *subtraction*: `data.some` minus `key`. Both sides are usually absent, so the expression quietly evaluates to `undefined` and the value renders blank — there is no error to tell you why. JSONata's answer is backtick-quoted names (`` `some-key` ``); **we do not support those** — a backtick is an unexpected character and fails the whole expression. This never affects tf's own identifiers (collection and state names are validated `^[a-z0-9_]+$`), only an arbitrary hyphenated key inside a row's stored `value` blob. **Workaround: rename the key to `snake_case` in the agent that writes the row.** If a `$:` projection of a stored field comes back mysteriously blank, check the key for a hyphen first.
 
