@@ -106,7 +106,7 @@ on_item_click:
         on_click: { action: delete_data_item, collection: product, key: '$: filename', then_close: true }
 ```
 
-## CRUD completeness — make interactive data actually interactive
+## CRUD completeness — make interactive data complete
 
 The goal is **CRUD-completeness for collections users should act on**: if a collection is meant to be created / edited / actioned, a bare display-only table isn't enough — give it those affordances. A row-click detail/edit modal is a **good, common mechanism** for this, but it is NOT mandatory — `row_actions`, inline forms, a kanban board, or an add-item button on their own can also carry the create/edit/act path. Genuinely read-only data (reports, metrics, logs) is fine as a plain table. The shapes below are the recommended mechanism for the common "browse + open + edit + add" case.
 
