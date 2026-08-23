@@ -220,7 +220,7 @@ Rules:
 - A node joins a lane by matching another node's `stage:` string exactly (the tag
   IS the lane label). **Untagged nodes float freely** — not corralled.
 - The set of lanes is whatever distinct `stage:` values exist; a tag no other node
-  shares is simply a one-node lane. There is no "undeclared" tag to warn about.
+  shares is a one-node lane. There is no "undeclared" tag to warn about.
 - Order follows the graph — each lane keeps its natural width and a gentle
   separation holds a gap between neighbours; drag a node past a neighbour to
   reorder them.
