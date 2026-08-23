@@ -1,7 +1,7 @@
 # tf-mcp — exposing factory tools to the chat agent
 
 ```python
-tf.add_mcp_server(name='my-tools', description='Description of what these tools do')
+tf.add_mcp_server(description='Description of what these tools do')
 
 def my_handler(params):
     # params is a dict matching the inputSchema
@@ -30,6 +30,14 @@ tf.add_mcp_tool('tool_name', 'Description for the LLM') \
 # agent's other valid tools keep working). Use snake_case, verb-first
 # (query_spend, search_claims).
 
+# Calling add_mcp_server() is the SWITCH that publishes this agent's tools — with
+# no server declared, NOTHING is published even if add_mcp_tool() ran. Its args are
+# KEYWORD-ONLY: use add_mcp_server(description='…'); a bare positional
+# add_mcp_server('…') raises TypeError. `description` (a one-line summary shown to
+# the Foreman chat) is OPTIONAL — add_mcp_server() alone is a valid publish switch.
+# (The old `name=` arg is deprecated and ignored — the agent slug + factory.yml
+# title are the identity; passing name= logs a one-line deprecation notice.)
+#
 # Order of add_mcp_server() vs add_mcp_tool() doesn't matter.
 # On the first tf.run_pending() tick, the core:
 #   1. Writes a row to `_mcp_tool_catalog` (key = AGENT_SLUG, the stable
@@ -39,6 +47,42 @@ tf.add_mcp_tool('tool_name', 'Description for the LLM') \
 #   2. Subscribes via tf.on_state('_mcp_{tool_name}', 'request')
 #      to each tool's dedicated inbox collection.
 ```
+
+## Read-me-first gate (`tf.add_mcp_readme`)
+
+Declare a mandatory briefing for an agent's tools:
+
+```python
+tf.add_mcp_readme("""
+Filing conventions for this agent's tools:
+- ALWAYS search before you create.
+- Write anchored diff-edits, never wholesale overwrites.
+""")
+```
+
+This registers a `read_me_first` tool (returns the body verbatim) and flags the agent's
+catalog with `readme_gate: true`. The tool's **description is fixed** ("Read this FIRST…")
+— you supply only the body (what the tool returns). One per agent; calling it again
+replaces the body. An agent that only calls `add_mcp_readme` (no `add_mcp_server`) still
+publishes.
+
+**Enforcement differs by consumer:**
+
+| Consumer | Behaviour |
+|---|---|
+| **Foreman chat** | **Gated** — the agent's other tools are blocked (per conversation) until `read_me_first` is called; the blocked call returns `"Call the _read_me_first() tool first — …"`. Enforcement is orchestrator-side, keyed on the conversation session. |
+| **External MCP clients** (`/api/mcp`) | **Not gated** — the fixed description instructs them to read it first (soft). |
+| **Cross-agent LLM loop** (`add_tools_from_agent`) | **Not gated** — the `read_me_first` tool is simply available in the bound set. |
+
+**Convention:** the readme is the CANONICAL "how to use these tools" text. An agent's own
+system prompt should **defer to it, not restate it** (avoids two drifting sources of truth).
+
+**Constraint — one gated agent per factory (for now).** The foreman chat flattens every
+agent's tools into one namespace keyed by bare tool name (last-wins). `read_me_first` is a
+fixed name, so if two agents in the same factory both call `add_mcp_readme`, one agent's
+`read_me_first` collides away and that agent's tools can never be unlocked in chat. Keep the
+readme on a single agent per factory until per-agent namespacing lands (e.g. the intelligence
+factory keeps `read_me_first` on the librarian, not on each ops agent).
 
 ## Tool annotations (`.with_annotations`)
 
@@ -62,6 +106,44 @@ tf.add_mcp_tool('tool_name', 'Description for the LLM') \
 ```
 
 The annotations land in the tool's `_mcp_tool_catalog` entry as an optional `annotations` field (absent when not declared); the orchestrator's external MCP endpoint passes the object through to clients verbatim.
+
+## Tool audience — publish scoping (`.hide_from_external` / `.hide_from_foreman` / `.hide_from_agent_loop`)
+
+By default a tool is visible on all three surfaces: external MCP clients (`/api/mcp`), the
+foreman chat, and agent LLM loops (`add_tools_from_self` / `add_tools_from_agent`). Chain a hide
+method to remove a surface (author-side; default-visible so you can't silently narrow by
+forgetting one):
+
+| Method | Removes the tool from |
+|---|---|
+| `.hide_from_external()` | External MCP clients (`/api/mcp`) |
+| `.hide_from_foreman()` | The in-built foreman chat |
+| `.hide_from_agent_loop()` | The LLM-loop bulk binders (`add_tools_from_self` / `add_tools_from_agent`) |
+
+```python
+# hidden from the public API, still in foreman + loops
+tf.add_mcp_tool('run_fraud_sweep', 'Sweep the whole book for fraud rings') \
+    .with_input({...}) \
+    .hide_from_external() \
+    .do(run_sweep)
+
+# pipeline-only — driven ONLY by direct _mcp_<name> state-writes, no LLM/client surface
+tf.add_mcp_tool('recompute_index', 'Rebuild the vector index') \
+    .hide_from_external() \
+    .hide_from_foreman() \
+    .hide_from_agent_loop() \
+    .do(recompute)
+```
+
+- Hiding all three leaves a tool reachable ONLY via its own `_mcp_<name>` request→response
+  pipeline (any code writing that row still drives it — see "How tool calls flow" below).
+- `.hide_from_agent_loop()` affects the **bulk binders** only. An explicit `add_tool('name')`
+  is a deliberate single pick and still binds — it's the author's own override.
+- Stored as a per-tool `hidden_from: [...]` list in the catalog (absent ⇒ visible).
+  `external`/`foreman` are enforced orchestrator-side (dropped from that surface's `tools/list`
+  AND `tools/call`); `agent_loop` is enforced core-side in `_gather_tools`.
+- This is **author-side** scoping, distinct from a credential's caller-side `tool_selection`
+  allow-list.
 
 ## How tool calls flow
 
