@@ -6,7 +6,7 @@
       .ask(prompt, inputs)            -> output
       .ask_with_meta(prompt, inputs)  -> (output, meta)
       # agentic (Phase 2):
-      .add_tools_from_self() .add_tools_from_agent(name) .add_tool(fn)
+      .add_tools_from_self([names]) .add_tools_from_agent(name, [names]) .add_tool(fn)
       .max_turns(n) .on_turn(cb)
       .run_agent_loop(task)           -> output
       .run_agent_loop_with_meta(task) -> (output, meta)
@@ -31,6 +31,22 @@ from . import base
 def llm() -> "LLMBuilder":
     """Entry point for the fluent LLM builder. See module docstring."""
     return LLMBuilder()
+
+
+def _as_name_list(tools):
+    """Normalise a tool allow-list arg: None -> None (means ALL), a single
+    string -> [string] (footgun guard: a bare str would otherwise iterate as
+    chars), a list/tuple/set of strings -> list. Anything else raises."""
+    if tools is None:
+        return None
+    if isinstance(tools, str):
+        return [tools]
+    if isinstance(tools, (list, tuple, set)):
+        names = [t for t in tools]
+        if not all(isinstance(t, str) for t in names):
+            raise TypeError("tools must be a string or a list of tool-name strings")
+        return names
+    raise TypeError("tools must be a string or a list of tool-name strings")
 
 
 class LLMBuilder:
@@ -91,12 +107,21 @@ class LLMBuilder:
         return self
 
     # ── agentic config (Phase 2 — recorded now, consumed by the loop later) ───
-    def add_tools_from_self(self) -> "LLMBuilder":
-        self._tool_sources.append(("self", None))
+    def add_tools_from_self(self, tools=None) -> "LLMBuilder":
+        """Bind THIS agent's own ``tf.add_mcp_tool`` handlers into the loop.
+        ``tools`` (optional) is an allow-list of bare tool names — omit for ALL
+        of this agent's tools, or pass e.g. ``['query_spend']`` to bind only
+        those. A single string is accepted as shorthand for ``[name]``."""
+        self._tool_sources.append(("self", None, _as_name_list(tools)))
         return self
 
-    def add_tools_from_agent(self, name: str) -> "LLMBuilder":
-        self._tool_sources.append(("agent", name))
+    def add_tools_from_agent(self, name: str, tools=None) -> "LLMBuilder":
+        """Bind another same-factory agent's PUBLISHED tools over the wire.
+        ``tools`` (optional) is an allow-list of bare tool names — omit for ALL
+        of that agent's published tools, or pass e.g. ``['create_person']`` to
+        bind only those. A single string is accepted as shorthand for
+        ``[name]``. Cross-factory binding is unavailable (security gated)."""
+        self._tool_sources.append(("agent", name, _as_name_list(tools)))
         return self
 
     def add_tool(self, fn_or_name) -> "LLMBuilder":

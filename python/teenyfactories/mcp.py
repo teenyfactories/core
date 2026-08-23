@@ -45,7 +45,7 @@ import re
 from typing import Callable, Dict, Any, Optional, List
 
 from . import config
-from .logging import log_error, log_debug
+from .logging import log_error, log_debug, log_info
 
 # A tool name becomes a `_mcp_<name>` collection, a Postgres NOTIFY channel, and
 # a closure key — and the orchestrator composes the external tool name as
@@ -65,6 +65,17 @@ _mcp_tools: List[Dict[str, Any]] = []
 _mcp_handlers: Dict[str, Callable] = {}
 _mcp_published: bool = False
 
+# read_me_first gate — set by add_mcp_readme(). The orchestrator's Foreman chat blocks
+# this agent's OTHER tools until read_me_first is called (external MCP clients + agent
+# LLM loops are NOT gated). Enforcement is entirely orchestrator-side; core only
+# declares the fixed tool + the readme_gate flag in the catalog.
+_mcp_readme_gate: bool = False
+_README_TOOL_NAME = 'read_me_first'
+_README_TOOL_DESC = (
+    'Read this FIRST, before calling any other tool on this agent — it explains how '
+    "this agent's tools work and how to use them correctly."
+)
+
 
 # =============================================================================
 # Public API — registration
@@ -78,6 +89,11 @@ class McpToolBuilder:
         self._description = description
         self._input_schema = {"type": "object", "properties": {}}
         self._annotations: Optional[Dict[str, Any]] = None
+        # Author-side publish scoping. Default: visible on every surface. Each hide_*
+        # call removes ONE surface: external MCP clients, the foreman chat, or agent
+        # LLM loops. Hiding all three leaves a tool driven ONLY by direct
+        # _mcp_<name> state-writes (no LLM/client surface at all).
+        self._hidden_from: set = set()
 
     def with_input(self, schema: dict):
         """Set the JSON Schema for this tool's input parameters."""
@@ -89,6 +105,28 @@ class McpToolBuilder:
         idempotentHint, openWorldHint, title). Passed through verbatim to MCP
         clients, which use it to categorise tools."""
         self._annotations = annotations
+        return self
+
+    def hide_from_external(self):
+        """Do NOT publish this tool to external MCP clients (/api/mcp). It stays
+        available to the foreman chat and to agent LLM loops."""
+        self._hidden_from.add('external')
+        return self
+
+    def hide_from_foreman(self):
+        """Do NOT expose this tool to the in-built foreman chat. It stays available
+        to external MCP clients and to agent LLM loops. Chain with
+        hide_from_external() for an internal / loop-only tool."""
+        self._hidden_from.add('foreman')
+        return self
+
+    def hide_from_agent_loop(self):
+        """Do NOT bind this tool into any agent's LLM loop via the bulk binders
+        (add_tools_from_self / add_tools_from_agent). It stays available to external
+        MCP clients and the foreman chat. Chain all three hides for a tool driven
+        ONLY by direct _mcp_<name> state-writes. (An explicit add_tool('name') is a
+        deliberate single pick and overrides this — it still binds.)"""
+        self._hidden_from.add('agent_loop')
         return self
 
     def do(self, handler: Callable):
@@ -117,6 +155,12 @@ class McpToolBuilder:
         }
         if self._annotations is not None:
             tool['annotations'] = self._annotations
+        if self._hidden_from:
+            # Absent field ⇒ visible everywhere (backward-compatible). Present ⇒
+            # 'external'/'foreman' drop the tool from that surface's tools/list +
+            # tools/call (orchestrator-side); 'agent_loop' drops it from the LLM
+            # loop's bulk binders (core-side, _gather_tools).
+            tool['hidden_from'] = sorted(self._hidden_from)
         _mcp_tools.append(tool)
         _mcp_handlers[self._name] = handler
         log_debug(f"🔨 Registered MCP tool: {self._name}")
@@ -137,11 +181,47 @@ def add_mcp_tool(name: str, description: str) -> McpToolBuilder:
     return McpToolBuilder(name, description)
 
 
-def add_mcp_server(name: str, description: str = ''):
-    """Declare the MCP server metadata. Catalog row is published on first run_pending()."""
+def add_mcp_server(*, description: str = '', name: str = None):
+    """Declare the MCP server — the publish SWITCH for this agent's tools.
+
+    Both args are KEYWORD-ONLY; a bare positional `add_mcp_server('desc')` raises
+    TypeError. `description` (a one-line summary shown to the Foreman chat) is
+    OPTIONAL, so `add_mcp_server()` alone is a valid publish switch. The catalog row
+    is published on the first run_pending() tick.
+    """
     global _mcp_server
-    _mcp_server = {'name': name, 'description': description}
-    log_debug(f"🔨 MCP server declared: {name}")
+    # LEGACY: `name=` is retired — the agent slug (factory.yml key) + display title
+    # are the identity, so a passed name is ignored (just logged). Remove this param
+    # once no factory calls add_mcp_server(name=...). Pre-stable.
+    if name is not None:
+        log_info(
+            f"🔨 add_mcp_server(name={name!r}) is deprecated and ignored — the agent "
+            'slug + factory.yml title are the identity. Drop the name= argument.'
+        )
+    _mcp_server = {'description': description}
+    log_debug('🔨 MCP server declared')
+
+
+def add_mcp_readme(body: str):
+    """Declare a mandatory read-me-first briefing for this agent's tools.
+
+    Registers a fixed-name `read_me_first` tool (returns `body` verbatim) and flags
+    the agent's catalog with `readme_gate: true`. In the Foreman chat the agent's
+    OTHER tools are blocked until read_me_first is called (enforced orchestrator-side,
+    per conversation); external MCP clients and agent LLM loops are NOT gated — they
+    just see the tool with its fixed "read this first" description. One per agent;
+    a second call replaces the body. Also acts as a publish switch — an agent that
+    only calls add_mcp_readme (no add_mcp_server) still publishes.
+    """
+    global _mcp_readme_gate
+    # Dedupe: replace an existing read_me_first body rather than twin the tool.
+    for t in [t for t in _mcp_tools if t.get('name') == _README_TOOL_NAME]:
+        _mcp_tools.remove(t)
+    _mcp_handlers.pop(_README_TOOL_NAME, None)
+    (add_mcp_tool(_README_TOOL_NAME, _README_TOOL_DESC)
+        .with_annotations({'readOnlyHint': True, 'openWorldHint': False})
+        .do(lambda _params: body))
+    _mcp_readme_gate = True
 
 
 # =============================================================================
@@ -171,16 +251,19 @@ def _maybe_publish_mcp():
     from .message_queue import on_state
 
     agent_name = _agent_name()
-    has_tools = bool(_mcp_server and _mcp_tools)
+    # A readme-only agent (add_mcp_readme, no add_mcp_server) still publishes.
+    has_tools = bool((_mcp_server or _mcp_readme_gate) and _mcp_tools)
 
     if has_tools:
         catalog_value = {
-            'server': _mcp_server,
+            'server': _mcp_server or {'description': ''},
             'tools': [
                 {**tool, 'agent': agent_name}
                 for tool in _mcp_tools
             ],
         }
+        if _mcp_readme_gate:
+            catalog_value['readme_gate'] = True
     else:
         catalog_value = {}
 

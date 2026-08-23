@@ -166,3 +166,73 @@ def test_exception_without_meta_reraises(monkeypatch):
     _patch_client(monkeypatch, ScriptedClient([FakeAI()], raise_at=0))
     with pytest.raises(RuntimeError, match="exploded"):
         agent.run_agent_loop(_builder(), "go")  # plain path keeps the fail-loud contract
+
+
+# ── Phase-2 tool sourcing: allow-list + audience (hide_from_agent_loop) ────────
+def test_as_name_list_normalises():
+    f = builder_mod._as_name_list
+    assert f(None) is None                       # None ⇒ ALL
+    assert f("query_spend") == ["query_spend"]   # bare str ⇒ [str] (footgun guard)
+    assert f(["a", "b"]) == ["a", "b"]
+    with pytest.raises(TypeError):
+        f([1, 2])                                # non-str entries rejected
+
+
+def _fake_self_tools(monkeypatch, tools):
+    from teenyfactories import mcp
+
+    monkeypatch.setattr(mcp, "_mcp_tools", tools)
+    monkeypatch.setattr(mcp, "_mcp_handlers", {t["name"]: (lambda p, _n=t["name"]: _n) for t in tools})
+
+
+def test_gather_tools_from_self_all_vs_subset(monkeypatch):
+    tools = [{"name": n, "description": n, "inputSchema": {}} for n in
+             ("query_spend", "describe_spend", "read_me_first")]
+    _fake_self_tools(monkeypatch, tools)
+
+    specs, _, _ = agent._gather_tools(builder_mod.llm().add_tools_from_self())
+    assert {s["function"]["name"] for s in specs} == {"query_spend", "describe_spend", "read_me_first"}
+
+    specs, dispatch, _ = agent._gather_tools(builder_mod.llm().add_tools_from_self(["query_spend"]))
+    assert [s["function"]["name"] for s in specs] == ["query_spend"]
+    assert set(dispatch) == {"query_spend"}
+
+
+def test_gather_tools_from_agent_subset_and_unmatched_warns(monkeypatch):
+    catalog = [{"name": n, "description": "", "inputSchema": {}} for n in
+               ("create_person", "get_person", "delete_person")]
+    monkeypatch.setattr(agent, "_agent_catalog_tools", lambda name: catalog)
+    monkeypatch.setattr(agent, "_wire_dispatcher", lambda tool, name: (lambda p: None))
+    warned = []
+    monkeypatch.setattr(agent, "log_warn", lambda m: warned.append(m))
+
+    b = builder_mod.llm().add_tools_from_agent("people_ops", ["create_person", "nope"])
+    specs, dispatch, _ = agent._gather_tools(b)
+    assert [s["function"]["name"] for s in specs] == ["create_person"]   # only the matched one bound
+    assert set(dispatch) == {"create_person"}
+    assert any("nope" in m for m in warned)                              # typo surfaced, not silent
+
+
+def test_gather_tools_skips_hide_from_agent_loop(monkeypatch):
+    # A tool flagged hide_from_agent_loop (hidden_from carries "agent_loop") is never
+    # bound by the bulk binders — from self OR from another agent's catalog.
+    _fake_self_tools(monkeypatch, [
+        {"name": "query_spend", "description": "", "inputSchema": {}},
+        {"name": "recompute_index", "description": "", "inputSchema": {}, "hidden_from": ["agent_loop"]},
+    ])
+    specs, dispatch, _ = agent._gather_tools(builder_mod.llm().add_tools_from_self())
+    assert {s["function"]["name"] for s in specs} == {"query_spend"}     # loop-hidden one dropped
+    assert "recompute_index" not in dispatch
+
+    catalog = [
+        {"name": "get_person", "description": "", "inputSchema": {}},
+        {"name": "reindex", "description": "", "inputSchema": {}, "hidden_from": ["agent_loop"]},
+    ]
+    monkeypatch.setattr(agent, "_agent_catalog_tools", lambda name: catalog)
+    monkeypatch.setattr(agent, "_wire_dispatcher", lambda tool, name: (lambda p: None))
+    warned = []
+    monkeypatch.setattr(agent, "log_warn", lambda m: warned.append(m))
+    b = builder_mod.llm().add_tools_from_agent("people_ops", ["get_person", "reindex"])
+    specs, _, _ = agent._gather_tools(b)
+    assert [s["function"]["name"] for s in specs] == ["get_person"]
+    assert any("reindex" in m for m in warned)                           # loop-hidden name treated as not-found
