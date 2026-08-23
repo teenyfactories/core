@@ -115,11 +115,25 @@ out, meta = (
 ```
 
 **Tool sourcing** (same-factory only):
-- `.add_tools_from_self()` — this agent's own `tf.add_mcp_tool` handlers (local)
-- `.add_tools_from_agent(name)` — another agent's published tools (over wire)
-- `.add_tool(fn_or_name)` — single callable or named MCP tool
+- `.add_tools_from_self(tools=None)` — this agent's own `tf.add_mcp_tool` handlers (local)
+- `.add_tools_from_agent(name, tools=None)` — another agent's published tools (over wire)
+- `.add_tool(fn_or_name)` — single callable or named local MCP tool
 
-Cross-factory tool binding unavailable (security gated).
+`tools` on the two `add_tools_from_*` links is an optional **allow-list of bare
+tool names** — omit (or `None`) to bind ALL of that source's tools, or pass a
+subset to bind only those:
+
+```python
+.add_tools_from_self()                              # all of this agent's tools
+.add_tools_from_self(['query_spend'])               # only this one (list…
+.add_tools_from_self('query_spend')                 # …or a bare string shorthand)
+.add_tools_from_agent('people_ops')                 # all of people_ops's published tools
+.add_tools_from_agent('people_ops', ['create_person', 'get_person'])  # only these two
+```
+
+A requested name that matches no available tool is skipped with a `factory_logs`
+warning (a typo binds nothing rather than erroring the loop). Cross-factory tool
+binding is unavailable (security gated).
 
 **Loop controls:**
 - `.max_turns(n)` — runaway guard (default 50), stop with `stop_reason='max_turns'`

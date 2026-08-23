@@ -114,6 +114,23 @@ def _injected_keys_for(builder, tool_name: str) -> set:
     return keys
 
 
+def _warn_unmatched(source, allow, available):
+    """Warn once for each requested tool name that no available tool matched —
+    a typo or an unpublished tool is silent otherwise (it just binds nothing)."""
+    if not allow:
+        return
+    missing = [n for n in allow if n not in available]
+    if missing:
+        log_warn(f"🔧 {source}: requested tool(s) not found, skipped: {sorted(missing)}")
+
+
+def _loop_visible(tool):
+    """A tool the author flagged .hide_from_agent_loop() carries "agent_loop" in its
+    hidden_from list — the bulk binders (add_tools_from_self / add_tools_from_agent)
+    skip it, and it's treated as not-there for the unmatched-name warning."""
+    return "agent_loop" not in (tool.get("hidden_from") or [])
+
+
 def _gather_tools(builder):
     """Return (specs, dispatch, schemas): bind_tools specs, name→callable dispatch
     map, and name→inputSchema for arg validation."""
@@ -124,15 +141,27 @@ def _gather_tools(builder):
         dispatch[tool["name"]] = handler
         schemas[tool["name"]] = tool.get("inputSchema") or {}
 
-    for kind, name in builder._tool_sources:
+    for kind, name, only in builder._tool_sources:
+        allow = set(only) if only else None
         if kind == "self":
             from teenyfactories import mcp
 
+            available = {t["name"] for t in mcp._mcp_tools if _loop_visible(t)}
             for tool in mcp._mcp_tools:
-                _add(tool, mcp._mcp_handlers.get(tool["name"]))
+                if not _loop_visible(tool):
+                    continue
+                if allow is None or tool["name"] in allow:
+                    _add(tool, mcp._mcp_handlers.get(tool["name"]))
+            _warn_unmatched("add_tools_from_self", allow, available)
         elif kind == "agent":
-            for tool in _agent_catalog_tools(name):
-                _add(tool, _wire_dispatcher(tool["name"], name))
+            catalog = _agent_catalog_tools(name)
+            available = {t["name"] for t in catalog if _loop_visible(t)}
+            for tool in catalog:
+                if not _loop_visible(tool):
+                    continue
+                if allow is None or tool["name"] in allow:
+                    _add(tool, _wire_dispatcher(tool["name"], name))
+            _warn_unmatched(f"add_tools_from_agent('{name}')", allow, available)
 
     for fn_or_name in builder._extra_tools:
         from teenyfactories import mcp
