@@ -65,7 +65,7 @@ from .message_queue import on_state, run_pending
 from .lifecycle import sleep, shutting_down
 
 # MCP Tools
-from .mcp import add_mcp_server, add_mcp_tool
+from .mcp import add_mcp_server, add_mcp_tool, add_mcp_readme
 
 # Data Collections
 from .collection import collection
@@ -139,7 +139,7 @@ __all__ = [
     'on_state', 'run_pending',
 
     # MCP Tools
-    'add_mcp_server', 'add_mcp_tool',
+    'add_mcp_server', 'add_mcp_tool', 'add_mcp_readme',
 
     # Data Collections
     'collection',
