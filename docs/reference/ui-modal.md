@@ -85,9 +85,10 @@ Slot-aware: children may carry `slot: header|body|footer` (default `body`; legac
 
 | Key | Type | Default | Notes |
 |---|---|---|---|
-| `width` | CSS length | — | e.g. `720px`, `100%`. |
-| `max_height` | CSS length | — | e.g. `80vh`. |
-| `min_height` | CSS length | — | e.g. `400px`. |
+| `width` | CSS length | `600px` | e.g. `720px`, `100%`. |
+| `max_width` | CSS length | `90vw` | Maximum modal width, viewport-relative. |
+| `max_height` | CSS length | `80vh` | e.g. `80vh`. |
+| `min_height` | CSS length | theme-dependent | e.g. `400px`. Falls back to theme token if unset. |
 | `height` | CSS length | `auto` | e.g. `auto`, `80vh`. |
 | `show_close_button` | bool | `true` | X button in header. |
 | `close_on_escape` | bool | `true` | Press Escape to close. |
@@ -100,7 +101,7 @@ Slot-aware: children may carry `slot: header|body|footer` (default `body`; legac
 - **Persist a record — `save_data_item` / `delete_data_item`** (with `then_close: true`) — a footer that writes a factory_data row (edit an existing record, `key: '$: data._key'`, where `data` is whatever was clicked to open the modal — see `ui-common` § `data`; or create a new one, `key: $uuid`). This is the canonical CRUD footer for a data-backed modal. A Button/Modal-footer with `save_data_item` and no explicit `data` auto-attaches the DataRef snapshot, so it writes back the body's form fields. See the full **table → tabbed detail/edit modal → footer CRUD → add-item** pattern in `read_docs{ doc: "ui-table" }` (§ CRUD).
 - `{ action: custom:save, then_close: true }` — bubbles to the HOST PAGE's `onAction` (a bespoke-page hook). Factory `default_ui` has no such host handler, so `custom:*` is a NO-OP there — use `save_data_item` to persist. (See `ui-common` for open/close action detail.)
 
-**Keyboard shortcuts (zero config):**
+**Keyboard shortcuts:**
 - **Escape** — closes the modal (unless `close_on_escape: false`).
 - **⌘+S** (mac) / **Ctrl+S** (win/linux) — fires the primary footer button. Auto-detected: framework finds the first footer button with `config.variant: primary` (or `config: { submit: true }` to override). Same handler path as a real click; `then_close` still applies. If no primary button exists, browser saves normally.
 

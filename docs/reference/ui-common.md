@@ -123,7 +123,7 @@ snake_case in YAML (`x_field`, `page_size`, `read_only`); PascalCase for JS comp
 
 ### Canonical keys (current)
 
-These leaf-specific keys are canonical as written, no alternate spellings exist: `color_map`; `mode: "compact"|"default"` (`container_status`); `show_close_button` / `show_quadrants` (`modal` / `scatter`); `edge_distance`/`edge_strength`/`edge_bundling`/`edge_bundling_offset`/`edge_bundling_min_offset`/`edge_anchor_center` (`force_directed` — d3-internal names stay `link*`); row-click detail via top-level `on_item_click.detail_modal` (`table`); fire-and-forget signals via array-form `on_click` writing a domain collection with `key: $uuid`; flat-collection `tree_editor` with a `parent_id` field, internal `save_data_item`/`delete_data_item` dispatch. Also fixed by design: `code_editor.theme: "vs-dark"|"light"`; Table column `type: "tags"` (scope-polymorphic `type:` at column level is fine — only the top-level `type:` was replaced by `component:`); `text_input.type: "email"|"password"|"number"|"text"`.
+These leaf-specific keys are canonical as written, no alternate spellings exist: `color_map`; `mode: "compact"|"default"` (`container_status`); `show_close_button` / `show_quadrants` (`modal` / `scatter`); `edge_distance`/`edge_strength`/`bundle_links`/`bundle_bezier_offset`/`bundle_bezier_min_offset`/`bundle_bezier_fan_bias`/`edge_anchor_center` (`force_directed` — d3-internal names stay `link*`); row-click detail via top-level `on_item_click.detail_modal` (`table`); fire-and-forget signals via array-form `on_click` writing a domain collection with `key: $uuid`; flat-collection `tree_editor` with a `parent_id` field, internal `save_data_item`/`delete_data_item` dispatch. Also fixed by design: `code_editor.theme: "vs-dark"|"light"`; Table column `type: "tags"` (scope-polymorphic `type:` at column level is fine — only the top-level `type:` was replaced by `component:`); `text_input.type: "email"|"password"|"number"|"text"`.
 
 ## Layout & responsive
 
@@ -374,9 +374,9 @@ Any config taking a derived value (cell labels, formatted strings, computed styl
 
 Default is literal: `label: "Email Drafter"` → literal; numbers/booleans/arrays → literal. JSONata via `$:` prefix: `label: "$:value.subject"` → evaluated. Object form interchangeable: `label: { jsonata: "value.subject" }` ≡ prefix form. Escape a literal `$:` with `"$$:..."`. Non-strings never evaluate. Reserved structural keys are literal-only: `component`, `id`, `data.collection`, `data.state`, `data.latest`, `data.endpoint`, `data.poll`, `data.inline`, `on_<event>.action`, `slot`, `config.pagination.mode`.
 
-The current row/node/scope is the implicit root — reference fields with **bare names** (`subject`, `value.body`). **There are no `$`-prefixed scope variables.** The tokenizer reads any `$word` as a *builtin function name* and expects a `(` after it, so `$user.email` is a parse error that resolves to `undefined`. Everything you can read is a bare key on the DataRef root (below).
+The current row/node/scope is the input — reference fields with **bare names** (`subject`, `value.body`). In stock JSONata `$` is the whole input, so `$.prospect_name` ≡ bare `prospect_name`; **prefer the bare form** on this surface. A `$name(` is a builtin call.
 
-> **Common mistake — no `$.field`.** The mini-parser doesn't support the real-JSONata `$` root sigil. `"$:$.prospect_name"` silently fails (resolver returns `undefined`, renderer falls back to the literal string). Always use bare names: `"$:prospect_name"`, `"$:'Review: ' & prospect_name"`, `"$:touch_count >= 3 ? 'exhausted' : 'active'"`.
+> **Style — prefer bare names.** `"$: prospect_name"` reads the field off the current scope; `"$: $.prospect_name"` is equivalent but noisier. Use bare names: `"$: prospect_name"`, `"$: 'Review: ' & prospect_name"`, `"$: touch_count >= 3 ? 'exhausted' : 'active'"`.
 
 ### Reserved DataRef root keys
 
@@ -393,7 +393,7 @@ The DataRef root is both the form-binding namespace (`field: notes`) and the `$:
 
 #### `data` — the one prefix that always resolves
 
-Every leaf that fires a handler names the thing that was clicked, but each used to name it after **itself**: a table published `row`, a `scatter` `point`, a `force_directed` `node`, a card/button nothing at all (the DataRef snapshot was passed bare). So `$: row.title` was correct on a table row click and silently `undefined` on a kanban card — the single most common authoring trap in this surface.
+Every leaf that fires a handler names the thing that was clicked, but each used to name it after **itself**: a table published `row`, a `scatter` `point`, a `force_directed` `node`, a card/button nothing at all (the DataRef snapshot was passed bare). So `$: row.title` was correct on a table row click and silently `undefined` on a kanban card — a frequent source of confusion in this surface.
 
 `data` is now published alongside whatever the leaf calls it, in both places a subject appears:
 
@@ -440,33 +440,45 @@ It is **read-only, enforced**: the object is deep-frozen and the key is non-writ
 
 ### Capabilities & limits
 
-`$:` is a hand-rolled subset, not full JSONata — projection, defaults, concat, comparisons, conditional visibility. It does NOT build or reshape data. Unsupported expressions fail silently (resolver returns `undefined`, renderer falls back to the literal string).
+`$:` is **real JSONata** — the full `jsonata@2.x` language. Projection, string concat `&`, comparisons, arithmetic (`+ - * / %`), logical `and`/`or`/`not`, ternaries, array indexing + predicate filters, mapping/reduction over sequences, object construction, `~>` chaining, the `$` root sigil, backtick-quoted keys (`` `some-key` ``), and the complete builtin library (`$sum`, `$map`, `$filter`, `$sort`, `$count`, `$keys`, regex, …) all work. See [jsonata.org](https://jsonata.org) for the full language.
 
-| ✅ Supported | ❌ Not supported (silently fails) |
-|---|---|
-| Literals (string/number/bool/`null`) | Object construction `{ ... }` |
-| Field access — bare name + dotted path | Variable bindings `:=` |
-| String concat `&` | Statement blocks `;` |
-| Compare `= != < <= > >=` | Array transforms/map/reduce/lambdas |
-| Arithmetic `+ - * /`, unary `-` | Predicates/filters `a[pred]`, regex |
-| Logical `and`/`or`/`not` | `$` root sigil / `$$` root-array sigil |
-| Ternary `cond ? then : else` | Higher-order functions |
-| Builtins — the 12 in the table below | Any other builtin |
-| Names `[a-zA-Z_][a-zA-Z0-9_]*` | Backtick-quoted names `` `some-key` `` — so **hyphenated keys are unreachable** (see below) |
+**One deliberate rule — a `null` leaf is treated as ABSENT.** A field that is explicitly `null` behaves exactly like a missing field: dropped by `&`-concat, propagated by arithmetic, never coerced to the string `"null"`. So a row with no `headroom_aud` (absent OR `null`) renders `Room left: $m`, not `Room left: $NaNm` or `Room left: $nullm`; `$uppercase(null)` is empty; `null >= 80 ? a : b` takes the else branch. This is the only divergence from stock JSONata. (It follows that arithmetic on a missing/`null` operand yields no-value transitively, and `&`-concat drops it — `$string($round(missing))` is `""`, never an error.)
 
-**The builtin library is 12 functions and only these 12.** Anything else (`$sum`, `$map`, `$now`, `$formatNumber`, …) is not implemented and the expression fails silently.
+**Evaluation.** A parse/evaluate error yields `undefined` (logged once to the console) and the consumer falls back to its default. A component whose `show_when`/`filter` is still resolving renders nothing until it lands (never a wrong flash); a computed style/label shows its default for one frame, then the value.
+
+**Function reference.** The full JSONata builtin library is available; common ones on this surface:
 
 | Builtin | Notes |
 |---|---|
-| `$uppercase(s)` `$lowercase(s)` | `null` / absent in → same out |
-| `$substring(s, start)` `$substring(s, start, length)` | |
-| `$string(x)` | `null` / absent → `""` |
-| `$number(x)` `$boolean(x)` `$not(x)` | `$number(null / absent)` → same out; `$number("abc")` → `NaN` |
-| `$length(x)` | string or array length; anything else → `0`. Deliberately does **not** pass absent through — `$length(missing)` is `0`, so `$length(missing) + 1` is `1` |
-| `$round(x)` `$round(x, precision)` | `precision` = digits after the decimal point, default `0`, **may be negative** (`$round(1234, -2)` → `1200`). Uses JSONata's **round-half-to-even** (banker's rounding): `$round(0.5)` → `0`, `$round(1.5)` → `2`, `$round(2.5)` → `2` — not `Math.round`'s half-away-from-zero |
-| `$floor(x)` `$ceil(x)` `$abs(x)` | |
+| `$uppercase(s)` `$lowercase(s)` `$substring(s, start[, len])` `$string(x)` `$number(x)` `$boolean(x)` `$not(x)` | string / cast helpers; a `null`/absent arg passes through as no-value |
+| `$count(x)` | array cardinality — array → its length, absent → `0`. **Use this for arrays / node degree.** |
+| `$length(s)` | **STRING** length — `$length("abc")` is `3`. It is NOT array length (that is `$count`); `$length` on an array is not a count. |
+| `$round(x[, precision])` | `precision` digits after the point, default `0`, may be negative (`$round(1234, -2)` → `1200`). Round-half-to-even: `$round(0.5)` → `0`, `$round(2.5)` → `2`. |
+| `$floor(x)` `$ceil(x)` `$abs(x)` `$sum(a)` `$max(a)` `$min(a)` `$average(a)` | numeric |
+| `$map(a, fn)` `$filter(a, fn)` `$reduce(a, fn)` `$sort(a)` `$keys(o)` `$merge(a)` `$append(a, b)` | higher-order + object/array library |
 
-**An absent operand makes the whole arithmetic expression absent.** `+ - * /` and unary `-` propagate a missing (or `null`) field the way the spec does: the result is `undefined`, propagation is transitive through nesting and through the numeric builtins, and `&`-concat then drops it. So a row with no `headroom_aud` renders `Room left: $m`, not `Room left: $NaNm`. The numeric builtins behave the same way, so `$string($round(missing))` is `""` and never an error. (`%` modulo is not part of the subset at all — it does not lex.)
+#### Array indexing & predicate filtering
+
+A postfix `expr[ inner ]` (chainable, freely interleaved with `.` — `a.b[0].c`) does one of **two** things, decided by what `inner` is:
+
+| `inner` is… | Branch | Behaviour |
+|---|---|---|
+| a **number** — literal OR computed (`[0]`, `[-1]`, `[$i]`, `[1+1]`) | **positional index** | Target treated as a sequence. Negative counts from the end (`[-1]` = last). Out-of-range, or indexing absent, → `undefined`. |
+| **a predicate** (`kind = 'x'`, `n > 0`, a bare field, …) | **per-item filter** | `inner` is evaluated with **each item as the context** (bare names and `data.` resolve against that item); truthy items kept. Collapses per JSONata: **0 kept → `undefined`, 1 kept → the item itself, ≥2 → an array**. |
+
+```yaml
+# index
+label: "$: rows[0].name"          # first row's name
+label: "$: rows[-1].name"         # last row's name
+# filter (edges whose target node is a state), then take the first
+value: "$: source_edges[target.data.type = 'state'][0].id"
+# count the matches (filter → $count)
+label: "$: $count(rows[status = 'open']) & ' open'"
+# map a field over a sequence (stock JSONata — auto-maps `.` over multiple matches)
+label: "$: nodes[data.type = 'agent'].id"
+```
+
+`.field` **maps over a sequence** (stock JSONata): `nodes[pred].id` yields the id of the match when one matches, and an array of ids when several do. To force a single value regardless, index first (`nodes[pred][0].id`).
 
 **Hyphenated keys are unreachable — `$: data.some-key` cannot be written.** A name is `[a-zA-Z_][a-zA-Z0-9_]*`, with no hyphen, so `data.some-key` lexes as *subtraction*: `data.some` minus `key`. Both sides are usually absent, so the expression quietly evaluates to `undefined` and the value renders blank — there is no error to tell you why. JSONata's answer is backtick-quoted names (`` `some-key` ``); **we do not support those** — a backtick is an unexpected character and fails the whole expression. This never affects tf's own identifiers (collection and state names are validated `^[a-z0-9_]+$`), only an arbitrary hyphenated key inside a row's stored `value` blob. **Workaround: rename the key to `snake_case` in the agent that writes the row.** If a `$:` projection of a stored field comes back mysteriously blank, check the key for a hyphen first.
 
@@ -625,7 +637,7 @@ All backing data lives in `factory_data`. Writes fan out: Postgres NOTIFY `{fact
 
 ## Theme
 
-Components use CSS custom properties for chrome (backgrounds, text, borders, status colours, focus rings); factory-passed palettes (e.g. `scatter.color_map`) may be raw hex. App-global tokens (set at orchestrator boot from `THEME_*` env vars): Brand `--primary-50`…`--primary-900`, `--secondary-50`…`--secondary-900`, `--tertiary-50`…`--tertiary-900`; Status `--success-500`/`--warning-500`/`--error-500`/`--info-500` (+ 50–900 variants); Surface `--bg-primary`/`--bg-secondary`/`--bg-tertiary`; Text `--text-primary`/`--text-secondary`/`--text-muted`; Border `--border-color`. Use inside a top-level `style:` block (or a dynamic JSONata-evaluated style value):
+Components use CSS custom properties for chrome (backgrounds, text, borders, status colours, focus rings); factory-passed palettes (e.g. `scatter.color_map`) may be raw hex. App-global tokens (set at orchestrator boot from `THEME_*` env vars): Brand `--primary-50`…`--primary-900`; Status `--success-50`/`--warning-50`/`--error-50`/`--info-50` and `--success-500`/`--warning-500`/`--error-500`/`--info-500` (+ 50–900 variants); Surface `--bg-primary`/`--bg-secondary`/`--bg-tertiary`; Text `--text-primary`/`--text-secondary`/`--text-muted`; Border `--border-color`. Use inside a top-level `style:` block (or a dynamic JSONata-evaluated style value):
 
 ```yaml
 - component: metrics

@@ -55,12 +55,14 @@ on_item_click:           # TOP-LEVEL on the component — a SIBLING of `config:`
 
 ## Config keys
 
-| Key | Effect |
-|---|---|
-| `key_field` | Row dedup key. |
-| `page_size` | Rows/page. |
-| `max_rows` | Cap on total rows paginated. |
-| `sort_field` / `sort_dir` | Default server sort. |
+| Key | Default | Effect |
+|---|---|---|
+| `key_field` | `id` | Row dedup key. |
+| `page_size` | `50` | Rows/page. |
+| `max_rows` | `100` | Cap on total rows paginated. |
+| `sort_field` | `null` | Default server sort field. |
+| `sort_dir` | `asc` | Sort direction (`asc` or `desc`). |
+| `empty_text` | — | Zero-rows message (overrides the default empty-state copy). |
 | `columns[].field` / `.label` | Dot-path into row data (nested ok, also sort key) / header text. |
 | `columns[].truncate` | Max chars, then ellipsis. |
 | `columns[].sortable: false` | Excludes column from header-click sort — for columns lacking a backing field. |
@@ -80,7 +82,7 @@ on_item_click:           # TOP-LEVEL on the component — a SIBLING of `config:`
 
 - **Sort — server-side only** (Table paginates; client-side sort would only reorder the loaded page). `sort_field`/`sort_dir` set default order, forwarded as query params (`ORDER BY` over all rows). Headers are clickable — click sorts by column, click again toggles `asc`⇄`desc`; active column shows ▲/▼. Meta-field map: `_updated_at`→`updated_at`, `_created_at`→`created_at`, `_state`→`state`, `_key`→`key`; else → `value->>'<field>'`. Omit → default `updated_at DESC`.
 - **Row click** publishes the clicked row onto DataRef so descendants resolve `$: data.field` — the same prefix a card, scatter or force-graph click publishes under, so a modal body doesn't care which leaf opened it. The legacy table-only spelling `$: row.field` still works and is deprecated (`check_ui` warns). Inside `on_item_click`'s own params, `$: data.field` and bare `$: field` both resolve. `on_item_click.open` / `row_actions[*].action: open` take a string id only (id-ref pattern; `ui-common`).
-- **`detail_modal` (legacy).** Portal-mounted, scoped to the clicked row; body + footer share one hoisted DataRefProvider — footer Save auto-sees body edits, no `data:`/`data_field:` needed (`key: '$: _key'`; `_key`/`_state`/`_updated_at` are Table-injected). Sibling id-ref is newer/recommended; `detail_modal:` predates it, still supported. **Known debt:** footer Save's snapshot leaks those underscore keys into saved `data` JSONB (display unaffected, re-flattened next read) — filed against composable-ui-architect debt register.
+- **`detail_modal` (legacy).** Portal-mounted, scoped to the clicked row; body + footer share one hoisted DataRefProvider — footer Save auto-sees body edits, no `data:`/`data_field:` needed (`key: '$: _key'`; `_key`/`_state`/`_updated_at` are Table-injected). Sibling id-ref is newer/recommended; `detail_modal:` predates it, still supported. **Known debt:** footer Save's snapshot leaks those underscore keys into saved `data` JSONB (display unaffected, re-flattened next read) — tracked in the composable-ui debt register (`memory/composable-ui/`).
 - **`sections:`** >1 entry → tab strip (`title` = label, footer visible across tabs); 1 entry → inline. Sizing `config: { width, max_width, max_height, min_height }` (defaults `800px`/`90vw`/`85vh`/unset) — set `min_height` if tab heights vary, else the modal collapses/jumps.
 - **Field asymmetry**: `markdown`/`table` read `field` at section top level; everything else reads it from `config:`. `table.field` needs array of **objects**; array of **strings** needs `tag_list`. Detail modal table sections also accept `columns: [{field, label}]` to control column headers.
 - `delete_data_item` + `then_close: true` = canonical row-remove; no built-in confirm step for `detail_modal` footer actions (`confirm_destructive_modal` not wireable there).
@@ -104,7 +106,7 @@ on_item_click:
         on_click: { action: delete_data_item, collection: product, key: '$: filename', then_close: true }
 ```
 
-## CRUD completeness — make interactive data actually interactive
+## CRUD completeness — make interactive data complete
 
 The goal is **CRUD-completeness for collections users should act on**: if a collection is meant to be created / edited / actioned, a bare display-only table isn't enough — give it those affordances. A row-click detail/edit modal is a **good, common mechanism** for this, but it is NOT mandatory — `row_actions`, inline forms, a kanban board, or an add-item button on their own can also carry the create/edit/act path. Genuinely read-only data (reports, metrics, logs) is fine as a plain table. The shapes below are the recommended mechanism for the common "browse + open + edit + add" case.
 
