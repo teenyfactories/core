@@ -5,15 +5,18 @@ Every factory's persistent state lives in named collections inside the
 `factory_data` table. Each row carries a `state` column that drives pub/sub
 — workers subscribe to state transitions via `tf.on_state(coll, state)`.
 
-Embeddings live in a companion `factory_vectors` table, keyed 1:1 with
-factory_data rows. The dim column is auto-selected from the embedding
-length.
+Embeddings live in a companion `factory_vectors` table, n:1 with factory_data
+rows: one factory_data row owns MANY chunk-vectors (PK includes chunk_index).
+Vectors are written via `.set_vectors(key, items)` — the ONE vector-write path;
+each item's `content` is embedded internally and stored alongside the vector.
+The dim column is auto-selected from the embedding length.
 
 Public API:
 
     tf.collection(name)
-        .set(key, state=..., data=..., embedding=...)   # update existing row
-        .add(state, data=..., embedding=...)            # create new row, auto-UUID
+        .set(key, state=..., data=...)                  # update existing row
+        .add(state, data=...)                           # create new row, auto-UUID
+        .set_vectors(key, items, provider=, model=)     # replace this row's vectors
         .get(key)                                       # full row or None
         .remove(key)                                    # delete one
         .exists(key)                                    # bool
@@ -127,14 +130,16 @@ class Collection:
         key: str,
         state: Optional[str] = None,
         data: Optional[dict] = None,
-        embedding: Optional[list] = None,
     ) -> str:
         """
         Upsert a row at this key. At least one of `state` or `data` is required.
 
         - state:     row's state (fires NOTIFY when row is inserted or state changes).
         - data:      JSONB payload.
-        - embedding: optional vector, routed to factory_vectors / dim column.
+
+        Embeddings are written separately via `.set_vectors(key, items)` — a
+        factory_data row can own many chunk-vectors (n:1), so the vector write
+        is its own call.
 
         On INSERT, omitted state defaults to 'new', omitted data defaults to {}.
         On UPDATE, each argument you pass replaces that column outright; arguments
@@ -147,9 +152,9 @@ class Collection:
 
         Returns the key (unchanged).
         """
-        if state is None and data is None and embedding is None:
+        if state is None and data is None:
             raise ValueError(
-                "collection.set requires at least one of state=, data=, embedding="
+                "collection.set requires at least one of state=, data="
             )
         if state is not None:
             _validate_state(state)
@@ -173,8 +178,6 @@ class Collection:
                     state is not None,
                 ),
             )
-            if embedding is not None:
-                self._upsert_embedding(cursor, factory_name, key, embedding)
             return key
         except Exception as e:
             db.invalidate_if_dead(e)
@@ -185,12 +188,12 @@ class Collection:
         self,
         state: str,
         data: Optional[dict] = None,
-        embedding: Optional[list] = None,
     ) -> str:
         """
         Insert a new row with an auto-generated UUID key.
 
         Returns the new key. State is required (every row carries one).
+        To attach vectors, call `.set_vectors(returned_key, items)`.
         """
         _validate_state(state)
         key = uuid.uuid4().hex
@@ -202,8 +205,6 @@ class Collection:
                    VALUES (%s, %s, %s, %s, %s, %s)""",
                 (factory_name, self._name, key, 'system', json.dumps(data or {}), state),
             )
-            if embedding is not None:
-                self._upsert_embedding(cursor, factory_name, key, embedding)
             return key
         except Exception as e:
             db.invalidate_if_dead(e)
@@ -224,15 +225,112 @@ class Collection:
             log_error(f"collection.remove failed: {e}")
             raise
 
-    def _upsert_embedding(self, cursor, factory_name: str, key: str, embedding: list):
-        col = _dim_column(embedding)
-        cursor.execute(
-            f"""INSERT INTO factory_vectors (factory_name, collection, key, {col})
-                VALUES (%s, %s, %s, %s::vector)
-                ON CONFLICT (factory_name, collection, key)
-                DO UPDATE SET {col} = EXCLUDED.{col}""",
-            (factory_name, self._name, key, str(embedding)),
-        )
+    def set_vectors(
+        self,
+        key: str,
+        items: List[Union[str, Dict[str, Any]]],
+        provider: Optional[str] = None,
+        model: Optional[str] = None,
+    ) -> int:
+        """
+        Replace ALL vectors owned by this row with `items` — the ONE vector-write
+        path (n:1: a factory_data row can own many chunk-vectors).
+
+        `items` is a list of either bare strings or dicts
+        ``{'content': str, 'meta': dict, 'embedding': list?}``. ONE item is a row
+        embedding; MANY are chunks (e.g. from `tf.chunk(text).by_paragraphs()`).
+        Each item's `content` is embedded internally (one batched `tf.embed`
+        call), unless the item carries a precomputed `embedding` (escape hatch).
+        `content` is stored on the vector row; `meta` is per-vector JSONB.
+
+        This is a FULL-KEY REPLACE: every existing vector for `key` is deleted
+        and the new set inserted in ONE transaction (re-embed is atomic — no
+        orphaned or half-written vectors). `set_vectors(key, [])` clears the
+        row's vectors. Other rows are untouched.
+
+        provider/model override the embedding model for this write (forwarded to
+        `tf.embed`); default is DEFAULT_EMBEDDING_PROVIDER/MODEL. HARD CONSTRAINT:
+        factory_vectors stores per-DIM columns, and different models produce
+        different dims + vector spaces — so a read (`vector_search`) MUST use the
+        SAME model as the write, or results are silently wrong/empty. The parent
+        factory_data row must already exist (FK). Returns the vector count.
+        """
+        from .embedding import embed
+
+        # normalise to {content, meta, embedding?}
+        norm: List[Dict[str, Any]] = []
+        for it in items:
+            if isinstance(it, str):
+                norm.append({"content": it, "meta": {}, "embedding": None})
+            else:
+                norm.append({
+                    "content": it.get("content", ""),
+                    "meta": it.get("meta") or {},
+                    "embedding": it.get("embedding"),
+                })
+
+        # embed everything without a precomputed vector, in one batched call
+        need = [n["content"] for n in norm if n["embedding"] is None]
+        if need:
+            builder = embed(need)
+            if provider is not None:
+                builder = builder.provider(provider)
+            if model is not None:
+                builder = builder.model(model)
+            computed = list(builder)  # resolves -> list-of-vectors
+            it = iter(computed)
+            for n in norm:
+                if n["embedding"] is None:
+                    n["embedding"] = list(next(it))
+
+        # validate a single dim across the batch (one dim column per write)
+        col = None
+        for n in norm:
+            c = _dim_column(n["embedding"])
+            if col is None:
+                col = c
+            elif c != col:
+                raise ValueError(
+                    "set_vectors: all items in one call must share an embedding "
+                    f"dimension (got {col} and {c}); use one model per write"
+                )
+
+        conn = db.get_connection()
+        prev_autocommit = conn.autocommit
+        try:
+            conn.autocommit = False
+            cur = conn.cursor()
+            cur.execute(
+                "DELETE FROM factory_vectors "
+                "WHERE factory_name = %s AND collection = %s AND key = %s",
+                (config.FACTORY_NAME, self._name, key),
+            )
+            if norm:
+                cur.executemany(
+                    f"""INSERT INTO factory_vectors
+                            (factory_name, collection, key, chunk_index, content, meta, {col})
+                        VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s::vector)""",
+                    [
+                        (config.FACTORY_NAME, self._name, key, idx,
+                         n["content"], json.dumps(n["meta"]), str(n["embedding"]))
+                        for idx, n in enumerate(norm)
+                    ],
+                )
+            conn.commit()
+            return len(norm)
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            db.invalidate_if_dead(e)
+            log_error(f"collection.set_vectors failed: {e}")
+            raise
+        finally:
+            try:
+                conn.autocommit = prev_autocommit
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------- reads
 
@@ -297,12 +395,24 @@ class Collection:
 
     def vector_search(self, text_or_vec: Union[str, List[float]]) -> "CollectionQuery":
         """
-        Start an ANN search. Accepts a query string (auto-embedded via tf.embed)
-        or a pre-computed vector. Returns a CollectionQuery ordered by
-        similarity — chain `.limit(n)` and a terminal (`.run()` / `.get_all()`).
-        With no `.limit()`, defaults to 10. Rows carry a `similarity` key.
+        Start an ANN search over this collection's chunk-vectors. Accepts a query
+        string (auto-embedded via tf.embed with the DEFAULT model — which MUST
+        match the model the vectors were written with) or a pre-computed vector.
+        Chain `.limit(n)` and a terminal (`.run()` / `.get_all()`); default limit
+        is 10. Each result is the parent row dict plus `similarity` and
+        `chunk` = {'content', 'index', 'meta'}.
 
-            tf.collection('chunks').state('vectorised').vector_search(q).limit(5).run()
+        Modes:
+          - default            → grouped by row: one best-matching chunk per
+                                  parent row (deduped), ranked by similarity.
+          - `.chunks()`        → per-chunk: every matching chunk-vector (for
+                                  within-a-document search).
+          - `.key(k)`          → restrict to a single row's vectors.
+
+            # best row per match, across the collection
+            tf.collection('documents').vector_search(q).limit(5).run()
+            # chunks within one document
+            tf.collection('documents').vector_search(q).key(fname).chunks().limit(8).run()
         """
         return CollectionQuery(self._name).vector_search(text_or_vec)
 

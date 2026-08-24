@@ -186,7 +186,7 @@ vector, meta = tf.embed("query").with_meta()               # (vector, meta) tupl
 
 LEGACY: eager kwargs form `tf.embed(text, provider=p, model=m)` still works, logs debug deprecation. **Migrate to fluent form**.
 
-**Integration:** Embeddings auto-flow into `factory_vectors` when you pass `embedding=` to `tf.collection(...).set(...)` / `.add(...)`. Vector search via `tf.collection(...).vector_search(...)`.
+**Integration (n:1):** Usually you don't call `tf.embed` yourself for storage — `tf.collection(...).set_vectors(key, items)` embeds internally and stores the vectors **n:1** on the row (one row owns many chunk-vectors). Chunk first with `tf.chunk(text).by_paragraphs()` / `.by_chars(n)` / `.by_markdown()`. Read back with `tf.collection(...).vector_search(...)` (grouped-by-row default; `.chunks()` for per-chunk, `.key(k)` for one row). Call `tf.embed` directly only for a pre-computed query vector or an item's escape-hatch `embedding`. Full detail: **tf-data § Vector writes / Vector search**. There is no `embedding=` kwarg on `set()`/`add()` — that was removed with the 1:1→n:1 change.
 
 **Provider config:** `DEFAULT_EMBEDDING_PROVIDER` (`openai`, `ollama`, `openrouter`), `DEFAULT_EMBEDDING_MODEL`. OpenRouter reuses `OPENROUTER_API_KEY` (one key for LLM + embeddings), returns routed cost (USD).
 
