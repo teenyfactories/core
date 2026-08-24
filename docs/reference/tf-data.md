@@ -164,7 +164,7 @@ tf.collection('documents').set_vectors('AE530989.pdf', [
     {'content': 'clause 8 — leave loading …',  'meta': {'start_page': 8}},
 ])
 
-# A row embedding is just a one-item list; a bare string works too.
+# A row embedding is a one-item list; a bare string works too.
 tf.collection('people').set_vectors('sam@x.com', ['Sam — staff engineer, ML platform'])
 ```
 
