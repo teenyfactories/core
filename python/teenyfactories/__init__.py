@@ -76,6 +76,9 @@ from .breakpoint import breakpoint
 # Embedding
 from .embedding import embed
 
+# Text chunking (pure stdlib splitter for set_vectors)
+from .chunk import chunk
+
 # Configuration (factory-visible values only — connection env vars are
 # internal and accessed directly via os.getenv inside the core.)
 from .config import FACTORY_NAME, AGENT_NAME, AGENT_SLUG, AGENT_ID
@@ -149,6 +152,9 @@ __all__ = [
 
     # Embedding
     'embed',
+
+    # Text chunking
+    'chunk',
 
     # Scheduling
     'on_schedule',

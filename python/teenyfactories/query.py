@@ -37,6 +37,8 @@ class CollectionQuery:
         self._wheres: List[tuple] = []  # list of (sql_fragment, params)
         self._vector: Optional[list] = None  # query embedding
         self._limit: Optional[int] = None
+        self._chunk_mode = False       # False = grouped-by-row; True = per-chunk
+        self._vec_key: Optional[str] = None  # single-row filter for vector_search
 
     # ── builder plumbing ─────────────────────────────────────────────────────
     def _clone(self) -> "CollectionQuery":
@@ -46,6 +48,8 @@ class CollectionQuery:
         q._wheres = list(self._wheres)
         q._vector = self._vector
         q._limit = self._limit
+        q._chunk_mode = self._chunk_mode
+        q._vec_key = self._vec_key
         return q
 
     # ── filters (chainable) ──────────────────────────────────────────────────
@@ -87,6 +91,21 @@ class CollectionQuery:
         q._vector = emb
         if q._limit is None:
             q._limit = _DEFAULT_VECTOR_LIMIT
+        return q
+
+    def chunks(self) -> "CollectionQuery":
+        """Per-CHUNK vector results (no grouping): each returned row is one
+        matched chunk-vector. Use for within-a-document search. Default (without
+        `.chunks()`) is grouped-by-row — one best chunk per parent row."""
+        q = self._clone()
+        q._chunk_mode = True
+        return q
+
+    def key(self, k: str) -> "CollectionQuery":
+        """Restrict a `vector_search` to the vectors owned by a single row
+        (a true single-row filter, replacing wide-pool + client-side trim)."""
+        q = self._clone()
+        q._vec_key = k
         return q
 
     def limit(self, n: int) -> "CollectionQuery":
@@ -133,28 +152,65 @@ class CollectionQuery:
             params: list = []
             if self._vector is not None:
                 col = _dim_column(self._vector)
-                cols = ", ".join("d." + c for c in _ROW_COLS)
-                params.append(str(self._vector))  # similarity select
-                sql = (
-                    f"SELECT {cols}, 1 - (v.{col} <=> %s::vector) AS similarity\n"
+                qv = str(self._vector)
+                pcols = ", ".join("d." + c for c in _ROW_COLS)
+
+                sim = f"1 - (v.{col} <=> %s::vector) AS similarity"
+                dist = f"v.{col} <=> %s::vector"
+
+                # Shared FROM/JOIN/WHERE, built once with its params in order.
+                # Object-level filters (.state()/.where()) compile against
+                # factory_data (alias d); a chunk-meta predicate (v.meta) would
+                # slot in here in future without reshaping the join.
+                body_params: list = [factory_name, self._name]
+                body = (
                     f"  FROM factory_vectors v\n"
                     f"  JOIN factory_data d ON d.factory_name = v.factory_name\n"
                     f"   AND d.collection = v.collection AND d.key = v.key\n"
                     f" WHERE v.factory_name = %s AND v.collection = %s\n"
                     f"   AND v.{col} IS NOT NULL"
                 )
-                params.extend([factory_name, self._name])
-                sql += self._scope_and_filters("d", params)
-                sql += f"\n ORDER BY v.{col} <=> %s::vector"
-                params.append(str(self._vector))  # order by
+                if self._vec_key is not None:
+                    body += "\n   AND v.key = %s"
+                    body_params.append(self._vec_key)
+                body += self._scope_and_filters("d", body_params)
+
+                if self._chunk_mode:
+                    # per-chunk: rank chunk-vectors directly.
+                    sql = f"SELECT {pcols}, v.chunk_index, v.content, v.meta,\n       {sim}\n" + body
+                    sql += f"\n ORDER BY {dist}"
+                else:
+                    # grouped-by-row: best chunk per parent key (DISTINCT ON key,
+                    # nearest chunk), then re-sort the winners by similarity.
+                    sql = (
+                        "SELECT * FROM (\n"
+                        f"SELECT DISTINCT ON (v.key) {pcols}, v.chunk_index, v.content, v.meta,\n"
+                        f"       {sim}\n" + body +
+                        f"\n ORDER BY v.key, {dist}\n) sub ORDER BY similarity DESC"
+                    )
+                # qv brackets the body: once in the SELECT similarity, once in
+                # the ORDER BY distance.
+                params = [qv] + body_params + [qv]
                 if self._limit is not None:
                     sql += " LIMIT %s"
                     params.append(self._limit)
+
                 cursor.execute(sql, params)
+                n = len(_ROW_COLS)
                 out = []
                 for row in cursor.fetchall():
-                    base = _row_to_dict(row[:-1])
-                    base["similarity"] = float(row[-1])
+                    base = _row_to_dict(row[:n])
+                    meta = row[n + 2]
+                    if meta is None:
+                        meta = {}
+                    elif not isinstance(meta, dict):
+                        import json as _json
+                        try:
+                            meta = _json.loads(meta)
+                        except Exception:
+                            meta = {}
+                    base["chunk"] = {"content": row[n + 1], "index": row[n], "meta": meta}
+                    base["similarity"] = float(row[n + 3])
                     out.append(base)
                 return out
 

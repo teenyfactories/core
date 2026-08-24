@@ -7,7 +7,8 @@ Every row carries a `state`, a `user_id`, and audit timestamps. The state drives
 ## Writes
 
 ```python
-# UPSERT by key. At least one of state= / data= / embedding= is required.
+# UPSERT by key. At least one of state= / data= is required. (Vectors are written
+# separately via .set_vectors(key, items) — see *Vector writes* below.)
 # On INSERT, omitted state defaults to 'new', omitted data defaults to {}.
 # On UPDATE, each argument you pass replaces that column outright; arguments you
 # omit are left untouched. There is NO field-level merge inside the JSONB:
@@ -149,51 +150,72 @@ tf.collection('chunks').remove('chunk-xyz')   # cascades to factory_vectors
 
 There is no bulk-delete. If you need to delete many rows, iterate and call `remove` per key — that's intentional friction.
 
-## Vector search
+## Vector writes — `set_vectors` (n:1)
 
-`.vector_search(text_or_vec)` is a **chainable filter, not a terminal** — it sets ANN (cosine) ordering on the query. You still call a terminal (`.run()` / `.get_all()`) to execute, and `.limit(n)` to cap the result. It composes with `.state(...)` and `.where(...)` like any other filter.
+Embeddings are **n:1** with a `factory_data` row: one row owns many chunk-vectors (`factory_vectors` PK = `factory_name, collection, key, chunk_index`). Vectors are written with `.set_vectors(key, items)` — the **one** vector-write path. The parent row (via `.set()`/`.add()`) must exist first (FK).
 
 ```python
-# Pass a string — auto-embedded via tf.embed — then cap and run.
-hits = tf.collection('chunks').vector_search('budget overrun').limit(5).run()
+# items = list of {'content': str, 'meta': dict} — or bare strings. ONE item is a
+# row embedding; MANY are chunks. set_vectors embeds each content internally (one
+# batched tf.embed call) and stores the content + per-chunk meta alongside the vector.
+tf.collection('documents').set('AE530989.pdf', state='vectorised', data={'pages': 12})
+tf.collection('documents').set_vectors('AE530989.pdf', [
+    {'content': 'clause 3 — overtime rates …', 'meta': {'start_page': 3}},
+    {'content': 'clause 8 — leave loading …',  'meta': {'start_page': 8}},
+])
 
-# Or pass a pre-computed vector.
-hits = tf.collection('chunks').vector_search(query_vector).limit(5).run()
-
-# Compose with state and payload filters.
-hits = tf.collection('chunks').state('ready') \
-    .where("document == 'ae400398.pdf' and token_count >= 400") \
-    .vector_search('budget overrun').limit(5).run()
-
-# Each hit is a row dict with an extra `similarity` key (cosine, 0..1):
-#   {factory_name, collection, key, user_id, data, state, created_at, updated_at, similarity}
+# A row embedding is just a one-item list; a bare string works too.
+tf.collection('people').set_vectors('sam@x.com', ['Sam — staff engineer, ML platform'])
 ```
 
-**`.vector_search()` with no `.limit()` defaults to a limit of 10** — an ANN search is always bounded; the default keeps an unlimited scan from coming back accidentally.
+Chunk your text first with `tf.chunk(...)` (pure stdlib, provider-neutral — no tokenizer; sizes are in **characters**):
+
+```python
+chunks = tf.chunk(doc).by_paragraphs()               # prose, paragraph-aware
+chunks = tf.chunk(doc).by_chars(1000).overlap(100)   # fixed window + overlap
+chunks = tf.chunk(md).by_markdown()                  # heading-sectioned; heading path in meta
+tf.collection('documents').set_vectors(key, chunks)  # each chunk -> one vector
+```
+
+**`set_vectors` is a full-key REPLACE**, atomic (one transaction): every existing vector for `key` is deleted and the new set inserted — re-embedding never leaves orphans. `set_vectors(key, [])` clears the row's vectors. Removing the parent row cascades its vectors.
+
+**Embedding model.** `set_vectors` embeds via the default provider/model; override per call with `.set_vectors(key, items, provider='openrouter', model='baai/bge-m3')`. **The read side MUST use the same model** — different models produce different dims + vector spaces, so a non-default write requires a matching read (see below). Dimension must match a fixed `factory_vectors` size — see **tf-llm § Embeddings**.
+
+## Vector search
+
+`.vector_search(text_or_vec)` is a **chainable filter, not a terminal** — it sets ANN (cosine) ordering. Call a terminal (`.run()` / `.get_all()`) to execute and `.limit(n)` to cap (default 10). A string query is auto-embedded with the **default** model (which must match the write model); pass a pre-embedded vector to use another.
+
+```python
+# Grouped default: the single best-matching chunk per parent row (deduped in SQL).
+hits = tf.collection('documents').vector_search('budget overrun').limit(5).run()
+
+# .chunks() — every matching chunk (within-a-document search).
+# .key(k)  — restrict to one row's vectors.
+hits = tf.collection('documents').vector_search('overtime') \
+    .key('AE530989.pdf').chunks().limit(8).run()
+
+# Object-level filters (.state()/.where()) narrow the PARENT rows first.
+hits = tf.collection('documents').where("state_field == 'VIC'") \
+    .vector_search('leave loading').limit(5).run()
+
+# Non-default embedding model: embed the query with the SAME model.
+q = tf.embed('budget overrun').provider('openrouter').model('baai/bge-m3')
+hits = tf.collection('documents').vector_search(q).limit(5).run()
+
+# Each hit is the parent row dict + `similarity` (cosine 0..1) + `chunk`:
+#   {factory_name, collection, key, ..., similarity,
+#    chunk: {content, index, meta}}
+```
 
 ### State filtering via the builder
 
-Reads filter by state via the `.state(...)` filter on the builder — the `state=` keyword argument is never used. State filtering is always declarative through the builder chain:
+Reads filter by state via the `.state(...)` filter — the `state=` keyword argument is never used:
 
 ```python
 tf.collection('c').state('x').get_all()
 tf.collection('c').state('x').count()
 tf.collection('c').state('x').vector_search(q).limit(5).run()
 ```
-
-## Embedding-aware writes
-
-```python
-vector = tf.embed("chunk text")
-tf.collection('chunks').set(
-    'chunk-1',
-    state='ready',
-    data={'text': 'chunk text'},
-    embedding=vector,                 # routed to factory_vectors / dim column
-)
-```
-
-The vector's dimension must match one of the fixed `factory_vectors` sizes or the write fails — see **tf-llm § Embeddings** (Dimension constraint) for the list and supported models.
 
 The `user_id` column defaults to `'system'` for agent writes. Backend API writes stamp the session's user id (fallback `'-1'` until auth is wired).
 
