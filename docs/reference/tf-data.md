@@ -168,6 +168,16 @@ tf.collection('documents').set_vectors('AE530989.pdf', [
 tf.collection('people').set_vectors('sam@x.com', ['Sam — staff engineer, ML platform'])
 ```
 
+**Precomputed embeddings.** Skip embedding cost by passing a precomputed vector: set_vectors accepts an optional `embedding` field per item. Items with precomputed vectors are stored as-is; only items without are embedded:
+
+```python
+# Embedding is skipped for the first item.
+tf.collection('documents').set_vectors('key', [
+    {'content': 'pre-embedded text', 'meta': {...}, 'embedding': [0.1, 0.2, ...]},
+    {'content': 'needs embedding', 'meta': {...}},  # embedded in one batch call
+])
+```
+
 Chunk your text first with `tf.chunk(...)` (pure stdlib, provider-neutral — no tokenizer; sizes are in **characters**):
 
 ```python

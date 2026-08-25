@@ -167,6 +167,8 @@ agents:
     volumes:                         # optional per-agent volume attachments; see Volumes below
       - name: agreements
         mode: read
+    uses_tools_from_agent:           # optional: other agents whose MCP tools this agent binds over the wire
+      - librarian_helper
 ```
 
 **Agent entry fields (all optional; the entry schema is strict — no other keys):**
@@ -181,6 +183,7 @@ agents:
 | `environment` | object | Per-agent environment variables passed into the container. |
 | `volumes` | list | Per-agent volume attachments (see Volumes › Attachments). |
 | `stage` | string | Optional free-text editor-graph lane tag (see Stage lanes). The editor discovers lanes from the distinct tag values. Presentational only; no runtime effect. Omit to leave the agent un-laned. |
+| `uses_tools_from_agent` | list of agent slugs | Other agents whose MCP tools this agent binds over the wire (`tf.llm().add_tools_from_agent('<slug>')`). Lists **agent slugs, not tool names**. Drawn in the editor graph as a **parallel double line** from this agent to each named one — distinct from the single state-flow edges and the dashed manual-transition edges. Documentation + graph only; no runtime effect (the actual binding is whatever the `.py` calls). A slug with no matching agent is skipped by the graph, not errored. |
 
 `input_states` / `output_states` are **wiring metadata** — they document the
 topology and drive the editor graph. The runtime subscription is whatever the
