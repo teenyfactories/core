@@ -170,7 +170,7 @@ class TestAddMcpReadme:
 
 
 # ---------------------------------------------------------------------------
-# Tool audience scoping: .hide_from_external/foreman/agent_loop()
+# Tool audience scoping: .audience([...]) whitelist → hidden_from denylist
 # ---------------------------------------------------------------------------
 
 
@@ -180,27 +180,37 @@ class TestToolAudience:
 
     def test_default_visible_no_hidden_from_field(self):
         mcp.add_mcp_tool('t_default', 'd').do(lambda p: None)
-        assert 'hidden_from' not in self._tool()               # absent ⇒ visible everywhere
+        assert 'hidden_from' not in self._tool()               # omitted ⇒ visible everywhere
 
-    def test_hide_from_external(self):
-        mcp.add_mcp_tool('t_ext', 'd').hide_from_external().do(lambda p: None)
-        assert self._tool()['hidden_from'] == ['external']
+    def test_audience_all_surfaces_has_no_hidden_from(self):
+        mcp.add_mcp_tool('t_all', 'd') \
+            .audience(['external', 'foreman', 'agent_loop']).do(lambda p: None)
+        assert 'hidden_from' not in self._tool()               # whole complement empty
 
-    def test_hide_from_foreman(self):
-        mcp.add_mcp_tool('t_fore', 'd').hide_from_foreman().do(lambda p: None)
-        assert self._tool()['hidden_from'] == ['foreman']
+    def test_audience_external_only_hides_the_rest(self):
+        mcp.add_mcp_tool('t_ext', 'd').audience(['external']).do(lambda p: None)
+        assert self._tool()['hidden_from'] == ['agent_loop', 'foreman']
 
-    def test_hide_from_agent_loop(self):
-        mcp.add_mcp_tool('t_loop', 'd').hide_from_agent_loop().do(lambda p: None)
-        assert self._tool()['hidden_from'] == ['agent_loop']
+    def test_audience_foreman_only_hides_the_rest(self):
+        mcp.add_mcp_tool('t_fore', 'd').audience(['foreman']).do(lambda p: None)
+        assert self._tool()['hidden_from'] == ['agent_loop', 'external']
 
-    def test_hide_all_three_is_pipeline_only_sorted(self):
-        mcp.add_mcp_tool('t_pipe', 'd') \
-            .hide_from_external().hide_from_foreman().hide_from_agent_loop().do(lambda p: None)
+    def test_audience_internal_alias_expands_to_foreman_and_loop(self):
+        mcp.add_mcp_tool('t_int', 'd').audience(['internal']).do(lambda p: None)
+        assert self._tool()['hidden_from'] == ['external']     # internal = foreman + agent_loop
+
+    def test_audience_accepts_bare_string(self):
+        mcp.add_mcp_tool('t_str', 'd').audience('external').do(lambda p: None)
+        assert self._tool()['hidden_from'] == ['agent_loop', 'foreman']
+
+    def test_empty_audience_is_pipeline_only_sorted(self):
+        mcp.add_mcp_tool('t_pipe', 'd').audience([]).do(lambda p: None)
         assert self._tool()['hidden_from'] == ['agent_loop', 'external', 'foreman']
 
-    def test_hide_methods_return_builder_for_chaining(self):
+    def test_unknown_surface_is_ignored(self):
+        mcp.add_mcp_tool('t_bad', 'd').audience(['external', 'bogus']).do(lambda p: None)
+        assert self._tool()['hidden_from'] == ['agent_loop', 'foreman']  # bogus dropped
+
+    def test_audience_returns_builder_for_chaining(self):
         b = mcp.add_mcp_tool('t_chain', 'd')
-        assert b.hide_from_external() is b
-        assert b.hide_from_foreman() is b
-        assert b.hide_from_agent_loop() is b
+        assert b.audience(['external']) is b

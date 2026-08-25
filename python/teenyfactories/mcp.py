@@ -59,6 +59,17 @@ from .logging import log_error, log_debug, log_info
 _TOOL_NAME_PATTERN = r'^[a-z0-9_]{1,35}$'
 _TOOL_NAME_RE = re.compile(_TOOL_NAME_PATTERN)
 
+# Publish surfaces a tool can be scoped to via .audience() (a whitelist). The
+# wire format stays a `hidden_from` DENYLIST (absent ⇒ visible everywhere) so
+# the orchestrator consumers are untouched — .audience() just compiles the
+# whitelist down to its complement at .do() time.
+#   external   — external MCP clients (/api/mcp): Claude-in-PowerPoint, research
+#   foreman    — the in-built per-factory chat
+#   agent_loop — bulk-bound into agent LLM loops (add_tools_from_self/agent)
+_MCP_SURFACES = {'external', 'foreman', 'agent_loop'}
+# Ergonomic alias: 'internal' = every non-external surface.
+_MCP_SURFACE_ALIASES = {'internal': {'foreman', 'agent_loop'}}
+
 # Module-level registry
 _mcp_server: Optional[Dict[str, str]] = None
 _mcp_tools: List[Dict[str, Any]] = []
@@ -89,11 +100,10 @@ class McpToolBuilder:
         self._description = description
         self._input_schema = {"type": "object", "properties": {}}
         self._annotations: Optional[Dict[str, Any]] = None
-        # Author-side publish scoping. Default: visible on every surface. Each hide_*
-        # call removes ONE surface: external MCP clients, the foreman chat, or agent
-        # LLM loops. Hiding all three leaves a tool driven ONLY by direct
-        # _mcp_<name> state-writes (no LLM/client surface at all).
-        self._hidden_from: set = set()
+        # Author-side publish scoping — a WHITELIST of surfaces (see .audience()).
+        # None ⇒ never scoped ⇒ visible on every surface (the fail-open default).
+        # A set ⇒ the tool is published ONLY to those surfaces.
+        self._audience: Optional[set] = None
 
     def with_input(self, schema: dict):
         """Set the JSON Schema for this tool's input parameters."""
@@ -107,26 +117,36 @@ class McpToolBuilder:
         self._annotations = annotations
         return self
 
-    def hide_from_external(self):
-        """Do NOT publish this tool to external MCP clients (/api/mcp). It stays
-        available to the foreman chat and to agent LLM loops."""
-        self._hidden_from.add('external')
-        return self
+    def audience(self, surfaces):
+        """Whitelist the publish surfaces for this tool (replaces the retired
+        hide_from_* methods — a whitelist, not a denylist).
 
-    def hide_from_foreman(self):
-        """Do NOT expose this tool to the in-built foreman chat. It stays available
-        to external MCP clients and to agent LLM loops. Chain with
-        hide_from_external() for an internal / loop-only tool."""
-        self._hidden_from.add('foreman')
-        return self
+        Surfaces: 'external' (external MCP clients, /api/mcp), 'foreman' (the
+        in-built factory chat), 'agent_loop' (bulk-bound into agent LLM loops via
+        add_tools_from_self / add_tools_from_agent). Convenience alias 'internal'
+        = foreman + agent_loop. Accepts a list (or a bare string).
 
-    def hide_from_agent_loop(self):
-        """Do NOT bind this tool into any agent's LLM loop via the bulk binders
-        (add_tools_from_self / add_tools_from_agent). It stays available to external
-        MCP clients and the foreman chat. Chain all three hides for a tool driven
-        ONLY by direct _mcp_<name> state-writes. (An explicit add_tool('name') is a
-        deliberate single pick and overrides this — it still binds.)"""
-        self._hidden_from.add('agent_loop')
+        Omit .audience() entirely for the default: visible on EVERY surface
+        (fail-open — sensitive tools must opt IN to a restriction). An explicit
+        empty list (`.audience([])`) publishes to NO LLM/client surface — the tool
+        is then driven ONLY by direct _mcp_<name> state-writes. An explicit
+        add_tool('name') in a loop is a deliberate single pick and still binds even
+        if 'agent_loop' is not in the audience."""
+        if isinstance(surfaces, str):
+            surfaces = [surfaces]
+        resolved: set = set()
+        for s in (surfaces or []):
+            if s in _MCP_SURFACE_ALIASES:
+                resolved |= _MCP_SURFACE_ALIASES[s]
+            elif s in _MCP_SURFACES:
+                resolved.add(s)
+            else:
+                log_error(
+                    f"🔨 Unknown MCP audience {s!r} on tool {self._name!r}: valid "
+                    f"surfaces are {sorted(_MCP_SURFACES)} (+ alias 'internal'). "
+                    'Ignored.'
+                )
+        self._audience = resolved
         return self
 
     def do(self, handler: Callable):
@@ -155,12 +175,16 @@ class McpToolBuilder:
         }
         if self._annotations is not None:
             tool['annotations'] = self._annotations
-        if self._hidden_from:
-            # Absent field ⇒ visible everywhere (backward-compatible). Present ⇒
+        if self._audience is not None:
+            # Compile the audience WHITELIST down to the wire's `hidden_from`
+            # DENYLIST = every surface NOT whitelisted. Empty complement (audience
+            # covers all surfaces) ⇒ no field ⇒ visible everywhere. Consumers:
             # 'external'/'foreman' drop the tool from that surface's tools/list +
             # tools/call (orchestrator-side); 'agent_loop' drops it from the LLM
             # loop's bulk binders (core-side, _gather_tools).
-            tool['hidden_from'] = sorted(self._hidden_from)
+            hidden = _MCP_SURFACES - self._audience
+            if hidden:
+                tool['hidden_from'] = sorted(hidden)
         _mcp_tools.append(tool)
         _mcp_handlers[self._name] = handler
         log_debug(f"🔨 Registered MCP tool: {self._name}")

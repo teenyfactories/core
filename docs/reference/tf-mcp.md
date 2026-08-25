@@ -107,41 +107,44 @@ factory keeps `read_me_first` on the librarian, not on each ops agent).
 
 The annotations land in the tool's `_mcp_tool_catalog` entry as an optional `annotations` field (absent when not declared); the orchestrator's external MCP endpoint passes the object through to clients verbatim.
 
-## Tool audience — publish scoping (`.hide_from_external` / `.hide_from_foreman` / `.hide_from_agent_loop`)
+## Tool audience — publish scoping (`.audience([...])`)
 
-By default a tool is visible on all three surfaces: external MCP clients (`/api/mcp`), the
-foreman chat, and agent LLM loops (`add_tools_from_self` / `add_tools_from_agent`). Chain a hide
-method to remove a surface (author-side; default-visible so you can't silently narrow by
-forgetting one):
+A tool can be published to three surfaces: external MCP clients (`/api/mcp`), the foreman
+chat, and agent LLM loops (`add_tools_from_self` / `add_tools_from_agent`). `.audience(list)`
+is an author-side **whitelist** naming the surfaces a tool is published to. **Omit it and the
+tool is visible on every surface** (fail-open — a sensitive tool must opt IN to a
+restriction; forgetting `.audience()` never silently narrows).
 
-| Method | Removes the tool from |
+| Surface token | Publishes to |
 |---|---|
-| `.hide_from_external()` | External MCP clients (`/api/mcp`) |
-| `.hide_from_foreman()` | The in-built foreman chat |
-| `.hide_from_agent_loop()` | The LLM-loop bulk binders (`add_tools_from_self` / `add_tools_from_agent`) |
+| `'external'` | External MCP clients (`/api/mcp`) |
+| `'foreman'` | The in-built foreman chat |
+| `'agent_loop'` | The LLM-loop bulk binders (`add_tools_from_self` / `add_tools_from_agent`) |
+| `'internal'` | Alias for `foreman` + `agent_loop` (every non-external surface) |
 
 ```python
-# hidden from the public API, still in foreman + loops
+# internal only — foreman + loops, NOT the public API
 tf.add_mcp_tool('run_fraud_sweep', 'Sweep the whole book for fraud rings') \
     .with_input({...}) \
-    .hide_from_external() \
+    .audience(['internal']) \
     .do(run_sweep)
 
 # pipeline-only — driven ONLY by direct _mcp_<name> state-writes, no LLM/client surface
 tf.add_mcp_tool('recompute_index', 'Rebuild the vector index') \
-    .hide_from_external() \
-    .hide_from_foreman() \
-    .hide_from_agent_loop() \
+    .audience([]) \
     .do(recompute)
 ```
 
-- Hiding all three leaves a tool reachable ONLY via its own `_mcp_<name>` request→response
-  pipeline (any code writing that row still drives it — see "How tool calls flow" below).
-- `.hide_from_agent_loop()` affects the **bulk binders** only. An explicit `add_tool('name')`
-  is a deliberate single pick and still binds — it's the author's own override.
-- Stored as a per-tool `hidden_from: [...]` list in the catalog (absent ⇒ visible).
-  `external`/`foreman` are enforced orchestrator-side (dropped from that surface's `tools/list`
-  AND `tools/call`); `agent_loop` is enforced core-side in `_gather_tools`.
+- An **empty** audience (`.audience([])`) leaves a tool reachable ONLY via its own
+  `_mcp_<name>` request→response pipeline (any code writing that row still drives it — see
+  "How tool calls flow" below).
+- Omitting `'agent_loop'` from the audience affects the **bulk binders** only. An explicit
+  `add_tool('name')` is a deliberate single pick and still binds — the author's own override.
+- Unknown surface tokens are logged and ignored (the valid tokens are whitelisted).
+- Compiles at registration to a per-tool `hidden_from: [...]` denylist in the catalog (the
+  complement of the audience; absent ⇒ visible everywhere). `external`/`foreman` are enforced
+  orchestrator-side (dropped from that surface's `tools/list` AND `tools/call`); `agent_loop`
+  is enforced core-side in `_gather_tools`.
 - This is **author-side** scoping, distinct from a credential's caller-side `tool_selection`
   allow-list.
 
