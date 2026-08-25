@@ -82,7 +82,7 @@ Avoid `limit` (ambiguous), `count` (aggregations), `pageSize` (camelCase), `trun
 
 ### Format / display
 
-`format` is canonical for **cell-level rendering**: `"number"` (locale-grouped int or 2-decimal float), `"percentage"` (`0–1` floats → `XX.X%`; >1 assumed already percent), `"relative_time"` (`"just now"`/`"5m ago"`/`"2h ago"`/`"3d ago"`), `"duration"` (`"123ms"`, Metrics). `metrics`, `detail_list`, and read-only `text_input`/`textarea` use it via shared `utils/formatValue`; `table` keeps its own cell formatter (slightly different `relative_time`/boolean handling) deliberately. New values land here first, then in `formatValue`.
+`format` is canonical for **cell-level rendering**: `"number"` (locale-grouped int or 2-decimal float), `"percentage"` (`0–1` floats → `XX.X%`; >1 assumed already percent), `"currency"` (AUD locale), `"relative_time"` (`"just now"`/`"5m ago"`/`"2h ago"`/`"3d ago"`), `"duration"` (`"123ms"`, Metrics). `metrics`, `detail_list`, and read-only `text_input`/`textarea` use it via shared `utils/formatValue`; `table` keeps its own cell formatter (slightly different `relative_time`/boolean handling) deliberately. New values land here first, then in `formatValue`.
 
 ### State / behaviour flags
 
