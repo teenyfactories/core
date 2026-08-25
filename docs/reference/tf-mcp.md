@@ -60,19 +60,33 @@ Filing conventions for this agent's tools:
 """)
 ```
 
-This registers a `read_me_first` tool (returns the body verbatim) and flags the agent's
-catalog with `readme_gate: true`. The tool's **description is fixed** ("Read this FIRST…")
-— you supply only the body (what the tool returns). One per agent; calling it again
-replaces the body. An agent that only calls `add_mcp_readme` (no `add_mcp_server`) still
-publishes.
+This registers a `read_me_first` tool and flags the agent's catalog with `readme_gate:
+true`. The tool's **description is fixed** ("Read this FIRST…") — you supply only the body.
+An agent that only calls `add_mcp_readme` (no `add_mcp_server`) still publishes.
+
+**Per-audience bodies (`.audience([...])`).** Chain `.audience()` (same surface tokens as
+tool scoping — `external` / `foreman` / `agent_loop`, alias `internal`) to serve *different*
+briefing text to different surfaces — e.g. an external product how-to vs. an internal
+agent-loop guide:
+
+```python
+tf.add_mcp_readme(EXTERNAL_HOWTO).audience(['external'])   # Claude-in-PowerPoint / research
+tf.add_mcp_readme(INTERNAL_GUIDE).audience(['internal'])   # foreman + agent loops
+```
+
+Omit `.audience()` for one body shared by every surface. A later call with the **same**
+audience replaces that body. The bodies ride on the single `read_me_first` catalog entry as
+a `readme_bodies` list; each surface **serves its own body straight from the catalog** (the
+briefing is static text — it is never round-tripped to the agent, so it works even when the
+agent is stopped). A surface an audience explicitly names wins over the all-surfaces default.
 
 **Enforcement differs by consumer:**
 
 | Consumer | Behaviour |
 |---|---|
-| **Foreman chat** | **Gated** — the agent's other tools are blocked (per conversation) until `read_me_first` is called; the blocked call returns `"Call the _read_me_first() tool first — …"`. Enforcement is orchestrator-side, keyed on the conversation session. |
-| **External MCP clients** (`/api/mcp`) | **Not gated** — the fixed description instructs them to read it first (soft). |
-| **Cross-agent LLM loop** (`add_tools_from_agent`) | **Not gated** — the `read_me_first` tool is simply available in the bound set. |
+| **Foreman chat** | **Gated** — the agent's other tools are blocked (per conversation) until `read_me_first` is called; the blocked call returns `"Call the _read_me_first() tool first — …"`. Orchestrator-side, keyed on the conversation session. The gate is set **only if a body targets `foreman`** — an `external`-only readme does NOT gate the foreman (it couldn't list `read_me_first` to ack it, which would deadlock the agent's other tools). |
+| **External MCP clients** (`/api/mcp`) | **Not gated** — the fixed description instructs them to read it first (soft). Served the `external` body. |
+| **Cross-agent LLM loop** (`add_tools_from_agent`) | **Not gated** — `read_me_first` is simply available in the bound set; served the `agent_loop` body. |
 
 **Convention:** the readme is the CANONICAL "how to use these tools" text. An agent's own
 system prompt should **defer to it, not restate it** (avoids two drifting sources of truth).
@@ -107,41 +121,44 @@ factory keeps `read_me_first` on the librarian, not on each ops agent).
 
 The annotations land in the tool's `_mcp_tool_catalog` entry as an optional `annotations` field (absent when not declared); the orchestrator's external MCP endpoint passes the object through to clients verbatim.
 
-## Tool audience — publish scoping (`.hide_from_external` / `.hide_from_foreman` / `.hide_from_agent_loop`)
+## Tool audience — publish scoping (`.audience([...])`)
 
-By default a tool is visible on all three surfaces: external MCP clients (`/api/mcp`), the
-foreman chat, and agent LLM loops (`add_tools_from_self` / `add_tools_from_agent`). Chain a hide
-method to remove a surface (author-side; default-visible so you can't silently narrow by
-forgetting one):
+A tool can be published to three surfaces: external MCP clients (`/api/mcp`), the foreman
+chat, and agent LLM loops (`add_tools_from_self` / `add_tools_from_agent`). `.audience(list)`
+is an author-side **whitelist** naming the surfaces a tool is published to. **Omit it and the
+tool is visible on every surface** (fail-open — a sensitive tool must opt IN to a
+restriction; forgetting `.audience()` never silently narrows).
 
-| Method | Removes the tool from |
+| Surface token | Publishes to |
 |---|---|
-| `.hide_from_external()` | External MCP clients (`/api/mcp`) |
-| `.hide_from_foreman()` | The in-built foreman chat |
-| `.hide_from_agent_loop()` | The LLM-loop bulk binders (`add_tools_from_self` / `add_tools_from_agent`) |
+| `'external'` | External MCP clients (`/api/mcp`) |
+| `'foreman'` | The in-built foreman chat |
+| `'agent_loop'` | The LLM-loop bulk binders (`add_tools_from_self` / `add_tools_from_agent`) |
+| `'internal'` | Alias for `foreman` + `agent_loop` (every non-external surface) |
 
 ```python
-# hidden from the public API, still in foreman + loops
+# internal only — foreman + loops, NOT the public API
 tf.add_mcp_tool('run_fraud_sweep', 'Sweep the whole book for fraud rings') \
     .with_input({...}) \
-    .hide_from_external() \
+    .audience(['internal']) \
     .do(run_sweep)
 
 # pipeline-only — driven ONLY by direct _mcp_<name> state-writes, no LLM/client surface
 tf.add_mcp_tool('recompute_index', 'Rebuild the vector index') \
-    .hide_from_external() \
-    .hide_from_foreman() \
-    .hide_from_agent_loop() \
+    .audience([]) \
     .do(recompute)
 ```
 
-- Hiding all three leaves a tool reachable ONLY via its own `_mcp_<name>` request→response
-  pipeline (any code writing that row still drives it — see "How tool calls flow" below).
-- `.hide_from_agent_loop()` affects the **bulk binders** only. An explicit `add_tool('name')`
-  is a deliberate single pick and still binds — it's the author's own override.
-- Stored as a per-tool `hidden_from: [...]` list in the catalog (absent ⇒ visible).
-  `external`/`foreman` are enforced orchestrator-side (dropped from that surface's `tools/list`
-  AND `tools/call`); `agent_loop` is enforced core-side in `_gather_tools`.
+- An **empty** audience (`.audience([])`) leaves a tool reachable ONLY via its own
+  `_mcp_<name>` request→response pipeline (any code writing that row still drives it — see
+  "How tool calls flow" below).
+- Omitting `'agent_loop'` from the audience affects the **bulk binders** only. An explicit
+  `add_tool('name')` is a deliberate single pick and still binds — the author's own override.
+- Unknown surface tokens are logged and ignored (the valid tokens are whitelisted).
+- Compiles at registration to a per-tool `hidden_from: [...]` denylist in the catalog (the
+  complement of the audience; absent ⇒ visible everywhere). `external`/`foreman` are enforced
+  orchestrator-side (dropped from that surface's `tools/list` AND `tools/call`); `agent_loop`
+  is enforced core-side in `_gather_tools`.
 - This is **author-side** scoping, distinct from a credential's caller-side `tool_selection`
   allow-list.
 

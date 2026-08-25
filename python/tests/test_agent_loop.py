@@ -168,7 +168,7 @@ def test_exception_without_meta_reraises(monkeypatch):
         agent.run_agent_loop(_builder(), "go")  # plain path keeps the fail-loud contract
 
 
-# ── Phase-2 tool sourcing: allow-list + audience (hide_from_agent_loop) ────────
+# ── Phase-2 tool sourcing: allow-list + audience (.audience() omitting agent_loop) ──
 def test_as_name_list_normalises():
     f = builder_mod._as_name_list
     assert f(None) is None                       # None ⇒ ALL
@@ -214,8 +214,8 @@ def test_gather_tools_from_agent_subset_and_unmatched_warns(monkeypatch):
 
 
 def test_gather_tools_skips_hide_from_agent_loop(monkeypatch):
-    # A tool flagged hide_from_agent_loop (hidden_from carries "agent_loop") is never
-    # bound by the bulk binders — from self OR from another agent's catalog.
+    # A tool whose .audience() omits agent_loop (hidden_from carries "agent_loop") is
+    # never bound by the bulk binders — from self OR from another agent's catalog.
     _fake_self_tools(monkeypatch, [
         {"name": "query_spend", "description": "", "inputSchema": {}},
         {"name": "recompute_index", "description": "", "inputSchema": {}, "hidden_from": ["agent_loop"]},

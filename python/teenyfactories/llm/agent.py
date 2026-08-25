@@ -125,7 +125,7 @@ def _warn_unmatched(source, allow, available):
 
 
 def _loop_visible(tool):
-    """A tool the author flagged .hide_from_agent_loop() carries "agent_loop" in its
+    """A tool whose .audience() omits 'agent_loop' carries "agent_loop" in its
     hidden_from list — the bulk binders (add_tools_from_self / add_tools_from_agent)
     skip it, and it's treated as not-there for the unmatched-name warning."""
     return "agent_loop" not in (tool.get("hidden_from") or [])
