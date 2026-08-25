@@ -59,6 +59,39 @@ from .logging import log_error, log_debug, log_info
 _TOOL_NAME_PATTERN = r'^[a-z0-9_]{1,35}$'
 _TOOL_NAME_RE = re.compile(_TOOL_NAME_PATTERN)
 
+# Publish surfaces a tool can be scoped to via .audience() (a whitelist). The
+# wire format stays a `hidden_from` DENYLIST (absent ⇒ visible everywhere) so
+# the orchestrator consumers are untouched — .audience() just compiles the
+# whitelist down to its complement at .do() time.
+#   external   — external MCP clients (/api/mcp): Claude-in-PowerPoint, research
+#   foreman    — the in-built per-factory chat
+#   agent_loop — bulk-bound into agent LLM loops (add_tools_from_self/agent)
+_MCP_SURFACES = {'external', 'foreman', 'agent_loop'}
+# Ergonomic alias: 'internal' = every non-external surface.
+_MCP_SURFACE_ALIASES = {'internal': {'foreman', 'agent_loop'}}
+
+
+def _resolve_audience(surfaces, label: str) -> set:
+    """Normalise an .audience() argument to a set of concrete surfaces.
+
+    Accepts a list/tuple/set or a bare string; expands the 'internal' alias;
+    logs-and-drops unknown tokens (never raises — registration runs at import
+    time). Shared by McpToolBuilder.audience() and the readme handle."""
+    if isinstance(surfaces, str):
+        surfaces = [surfaces]
+    resolved: set = set()
+    for s in (surfaces or []):
+        if s in _MCP_SURFACE_ALIASES:
+            resolved |= _MCP_SURFACE_ALIASES[s]
+        elif s in _MCP_SURFACES:
+            resolved.add(s)
+        else:
+            log_error(
+                f"🔨 Unknown MCP audience {s!r} on {label}: valid surfaces are "
+                f"{sorted(_MCP_SURFACES)} (+ alias 'internal'). Ignored."
+            )
+    return resolved
+
 # Module-level registry
 _mcp_server: Optional[Dict[str, str]] = None
 _mcp_tools: List[Dict[str, Any]] = []
@@ -70,6 +103,12 @@ _mcp_published: bool = False
 # LLM loops are NOT gated). Enforcement is entirely orchestrator-side; core only
 # declares the fixed tool + the readme_gate flag in the catalog.
 _mcp_readme_gate: bool = False
+# Registered readme bodies, in call order: [{'audience': set|None, 'body': str}].
+# audience None ⇒ all surfaces (the default when .audience() isn't chained). One
+# read_me_first catalog tool aggregates these into a `readme_bodies` list; each
+# publish surface serves the body for its own audience (serve-from-catalog — the
+# body is static text, never round-tripped to the agent from external/foreman).
+_mcp_readmes: List[Dict[str, Any]] = []
 _README_TOOL_NAME = 'read_me_first'
 _README_TOOL_DESC = (
     'Read this FIRST, before calling any other tool on this agent — it explains how '
@@ -89,11 +128,10 @@ class McpToolBuilder:
         self._description = description
         self._input_schema = {"type": "object", "properties": {}}
         self._annotations: Optional[Dict[str, Any]] = None
-        # Author-side publish scoping. Default: visible on every surface. Each hide_*
-        # call removes ONE surface: external MCP clients, the foreman chat, or agent
-        # LLM loops. Hiding all three leaves a tool driven ONLY by direct
-        # _mcp_<name> state-writes (no LLM/client surface at all).
-        self._hidden_from: set = set()
+        # Author-side publish scoping — a WHITELIST of surfaces (see .audience()).
+        # None ⇒ never scoped ⇒ visible on every surface (the fail-open default).
+        # A set ⇒ the tool is published ONLY to those surfaces.
+        self._audience: Optional[set] = None
 
     def with_input(self, schema: dict):
         """Set the JSON Schema for this tool's input parameters."""
@@ -107,26 +145,22 @@ class McpToolBuilder:
         self._annotations = annotations
         return self
 
-    def hide_from_external(self):
-        """Do NOT publish this tool to external MCP clients (/api/mcp). It stays
-        available to the foreman chat and to agent LLM loops."""
-        self._hidden_from.add('external')
-        return self
+    def audience(self, surfaces):
+        """Whitelist the publish surfaces for this tool (replaces the retired
+        hide_from_* methods — a whitelist, not a denylist).
 
-    def hide_from_foreman(self):
-        """Do NOT expose this tool to the in-built foreman chat. It stays available
-        to external MCP clients and to agent LLM loops. Chain with
-        hide_from_external() for an internal / loop-only tool."""
-        self._hidden_from.add('foreman')
-        return self
+        Surfaces: 'external' (external MCP clients, /api/mcp), 'foreman' (the
+        in-built factory chat), 'agent_loop' (bulk-bound into agent LLM loops via
+        add_tools_from_self / add_tools_from_agent). Convenience alias 'internal'
+        = foreman + agent_loop. Accepts a list (or a bare string).
 
-    def hide_from_agent_loop(self):
-        """Do NOT bind this tool into any agent's LLM loop via the bulk binders
-        (add_tools_from_self / add_tools_from_agent). It stays available to external
-        MCP clients and the foreman chat. Chain all three hides for a tool driven
-        ONLY by direct _mcp_<name> state-writes. (An explicit add_tool('name') is a
-        deliberate single pick and overrides this — it still binds.)"""
-        self._hidden_from.add('agent_loop')
+        Omit .audience() entirely for the default: visible on EVERY surface
+        (fail-open — sensitive tools must opt IN to a restriction). An explicit
+        empty list (`.audience([])`) publishes to NO LLM/client surface — the tool
+        is then driven ONLY by direct _mcp_<name> state-writes. An explicit
+        add_tool('name') in a loop is a deliberate single pick and still binds even
+        if 'agent_loop' is not in the audience."""
+        self._audience = _resolve_audience(surfaces, f"tool {self._name!r}")
         return self
 
     def do(self, handler: Callable):
@@ -155,12 +189,16 @@ class McpToolBuilder:
         }
         if self._annotations is not None:
             tool['annotations'] = self._annotations
-        if self._hidden_from:
-            # Absent field ⇒ visible everywhere (backward-compatible). Present ⇒
+        if self._audience is not None:
+            # Compile the audience WHITELIST down to the wire's `hidden_from`
+            # DENYLIST = every surface NOT whitelisted. Empty complement (audience
+            # covers all surfaces) ⇒ no field ⇒ visible everywhere. Consumers:
             # 'external'/'foreman' drop the tool from that surface's tools/list +
             # tools/call (orchestrator-side); 'agent_loop' drops it from the LLM
             # loop's bulk binders (core-side, _gather_tools).
-            tool['hidden_from'] = sorted(self._hidden_from)
+            hidden = _MCP_SURFACES - self._audience
+            if hidden:
+                tool['hidden_from'] = sorted(hidden)
         _mcp_tools.append(tool)
         _mcp_handlers[self._name] = handler
         log_debug(f"🔨 Registered MCP tool: {self._name}")
@@ -202,26 +240,120 @@ def add_mcp_server(*, description: str = '', name: str = None):
     log_debug('🔨 MCP server declared')
 
 
+class _ReadmeHandle:
+    """Returned by add_mcp_readme so `.audience([...])` can scope which surfaces
+    receive THIS briefing body (chainable, mirroring McpToolBuilder.audience)."""
+
+    def __init__(self, entry: Dict[str, Any]):
+        self._entry = entry
+
+    def audience(self, surfaces):
+        """Scope this readme body to the given surfaces (see McpToolBuilder.audience
+        for the surface tokens + the 'internal' alias). Omit to target every
+        surface. Different-audience bodies coexist on one agent; a later readme with
+        the SAME audience replaces this one's body."""
+        self._entry['audience'] = _resolve_audience(surfaces, 'readme')
+        _rebuild_readme_tool()
+        return self
+
+
 def add_mcp_readme(body: str):
     """Declare a mandatory read-me-first briefing for this agent's tools.
 
-    Registers a fixed-name `read_me_first` tool (returns `body` verbatim) and flags
-    the agent's catalog with `readme_gate: true`. In the Foreman chat the agent's
-    OTHER tools are blocked until read_me_first is called (enforced orchestrator-side,
-    per conversation); external MCP clients and agent LLM loops are NOT gated — they
-    just see the tool with its fixed "read this first" description. One per agent;
-    a second call replaces the body. Also acts as a publish switch — an agent that
-    only calls add_mcp_readme (no add_mcp_server) still publishes.
+    Registers a fixed-name `read_me_first` tool (fixed "read this first" description)
+    and — when a body targets the foreman — flags the catalog with `readme_gate:
+    true`, so in the Foreman chat the agent's OTHER tools are blocked until
+    read_me_first is called (enforced orchestrator-side, per conversation). External
+    MCP clients and agent LLM loops are NEVER gated.
+
+    Per-audience bodies: chain `.audience([...])` to serve DIFFERENT briefing text to
+    different surfaces (e.g. an external product how-to vs. an internal agent-loop
+    guide) — `add_mcp_readme(ext).audience(['external'])` +
+    `add_mcp_readme(internal).audience(['internal'])`. Omit `.audience()` for one
+    body shared by every surface. A later call with the same audience replaces the
+    body. The briefing is static text served straight from the catalog by each
+    surface (not round-tripped to the agent). Also a publish switch — an agent that
+    only calls add_mcp_readme still publishes.
     """
+    entry: Dict[str, Any] = {'audience': None, 'body': body}  # None ⇒ all surfaces
+    _mcp_readmes.append(entry)
+    _rebuild_readme_tool()
+    return _ReadmeHandle(entry)
+
+
+def _deduped_readmes() -> List[tuple]:
+    """Collapse _mcp_readmes to one (audience, body) per distinct audience, last
+    writer wins, preserving first-seen order. audience is None (all) or a set."""
+    order: List[Any] = []          # audience-keys in first-seen order (None or frozenset)
+    body_by_key: Dict[Any, str] = {}
+    for e in _mcp_readmes:
+        key = None if e['audience'] is None else frozenset(e['audience'])
+        if key not in body_by_key:
+            order.append(key)
+        body_by_key[key] = e['body']
+    return [(None if k is None else set(k), body_by_key[k]) for k in order]
+
+
+def _select_readme_body(surface: str, deduped: List[tuple]) -> str:
+    """Body a given surface should serve: an audience explicitly naming `surface`
+    wins over the all-surfaces default; falls back to the first body registered."""
+    for aud, body in deduped:
+        if aud is not None and surface in aud:
+            return body
+    for aud, body in deduped:
+        if aud is None:
+            return body
+    return deduped[0][1] if deduped else ''
+
+
+def _rebuild_readme_tool():
+    """(Re)materialise the single read_me_first catalog tool from _mcp_readmes.
+
+    Aggregates every registered body into a `readme_bodies` list on ONE tool entry
+    (two same-named entries would collide in the flat catalog). Derives the tool's
+    surface visibility (union of all body audiences) and the foreman gate flag."""
     global _mcp_readme_gate
-    # Dedupe: replace an existing read_me_first body rather than twin the tool.
+    # Drop any prior read_me_first tool + handler; rebuilt from scratch each call.
     for t in [t for t in _mcp_tools if t.get('name') == _README_TOOL_NAME]:
         _mcp_tools.remove(t)
     _mcp_handlers.pop(_README_TOOL_NAME, None)
-    (add_mcp_tool(_README_TOOL_NAME, _README_TOOL_DESC)
-        .with_annotations({'readOnlyHint': True, 'openWorldHint': False})
-        .do(lambda _params: body))
-    _mcp_readme_gate = True
+
+    deduped = _deduped_readmes()
+    if not deduped:
+        _mcp_readme_gate = False
+        return
+
+    # Union of audiences (None ⇒ all surfaces) → which surfaces LIST read_me_first.
+    union: set = set()
+    for aud, _ in deduped:
+        union = _MCP_SURFACES if aud is None else (union | aud)
+        if union == _MCP_SURFACES:
+            break
+
+    tool: Dict[str, Any] = {
+        'name': _README_TOOL_NAME,
+        'description': _README_TOOL_DESC,
+        'inputSchema': {'type': 'object', 'properties': {}},
+        'annotations': {'readOnlyHint': True, 'openWorldHint': False},
+        'readme_bodies': [
+            {'audience': (None if aud is None else sorted(aud)), 'body': body}
+            for aud, body in deduped
+        ],
+    }
+    hidden = _MCP_SURFACES - union
+    if hidden:
+        tool['hidden_from'] = sorted(hidden)
+    _mcp_tools.append(tool)
+
+    # Round-trip handler (agent_loop bindings + direct _mcp_read_me_first writes —
+    # external/foreman serve from the catalog and never reach this). Serves the
+    # agent_loop-scoped body, else the default.
+    _mcp_handlers[_README_TOOL_NAME] = lambda _params: _select_readme_body('agent_loop', deduped)
+
+    # Gate the foreman ONLY when a body actually targets it — an external-only
+    # readme must NOT gate the foreman (it can't list read_me_first to ack it, which
+    # would deadlock every other tool on this agent).
+    _mcp_readme_gate = 'foreman' in union
 
 
 # =============================================================================
@@ -251,8 +383,10 @@ def _maybe_publish_mcp():
     from .message_queue import on_state
 
     agent_name = _agent_name()
-    # A readme-only agent (add_mcp_readme, no add_mcp_server) still publishes.
-    has_tools = bool((_mcp_server or _mcp_readme_gate) and _mcp_tools)
+    # A readme-only agent (add_mcp_readme, no add_mcp_server) still publishes —
+    # gate on the readme PRESENCE, not the foreman-gate flag (an external-only
+    # readme sets the flag False but must still publish its read_me_first tool).
+    has_tools = bool((_mcp_server or _mcp_readmes) and _mcp_tools)
 
     if has_tools:
         catalog_value = {
