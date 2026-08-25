@@ -20,6 +20,7 @@ def _reset_registry(monkeypatch):
     """Isolate the module-level registry + capture error logs for each test."""
     mcp._mcp_tools.clear()
     mcp._mcp_handlers.clear()
+    mcp._mcp_readmes.clear()
     errors = []
     monkeypatch.setattr(mcp, 'log_error', lambda m: errors.append(m))
     # Silence the debug line the happy path emits.
@@ -167,6 +168,58 @@ class TestAddMcpReadme:
         readmes = [t for t in mcp._mcp_tools if t['name'] == 'read_me_first']
         assert len(readmes) == 1                                # not double-registered
         assert mcp._mcp_handlers['read_me_first']({}) == 'second'
+
+    def test_default_body_carries_readme_bodies_all_surfaces(self):
+        mcp.add_mcp_readme('all')
+        tool = next(t for t in mcp._mcp_tools if t['name'] == 'read_me_first')
+        assert tool['readme_bodies'] == [{'audience': None, 'body': 'all'}]
+        assert 'hidden_from' not in tool                        # visible on every surface
+
+
+class TestReadmeAudience:
+    @pytest.fixture(autouse=True)
+    def _reset_gate(self, monkeypatch):
+        monkeypatch.setattr(mcp, '_mcp_readme_gate', False)
+
+    def _readme_tool(self):
+        return next(t for t in mcp._mcp_tools if t['name'] == 'read_me_first')
+
+    def test_per_audience_bodies_coexist_and_serve_by_surface(self):
+        mcp.add_mcp_readme('external product how-to').audience(['external'])
+        mcp.add_mcp_readme('internal loop guide').audience(['internal'])
+        deduped = mcp._deduped_readmes()
+        assert mcp._select_readme_body('external', deduped) == 'external product how-to'
+        assert mcp._select_readme_body('foreman', deduped) == 'internal loop guide'
+        assert mcp._select_readme_body('agent_loop', deduped) == 'internal loop guide'
+        # union of {external} ∪ {foreman,agent_loop} = all ⇒ no hidden_from
+        assert 'hidden_from' not in self._readme_tool()
+        assert mcp._mcp_readme_gate is True                     # internal includes foreman
+
+    def test_specific_audience_wins_over_default(self):
+        mcp.add_mcp_readme('default for all')
+        mcp.add_mcp_readme('external-specific').audience(['external'])
+        deduped = mcp._deduped_readmes()
+        assert mcp._select_readme_body('external', deduped) == 'external-specific'
+        assert mcp._select_readme_body('foreman', deduped) == 'default for all'
+
+    def test_external_only_readme_hides_other_surfaces_and_does_not_gate_foreman(self):
+        mcp.add_mcp_readme('public only').audience(['external'])
+        tool = self._readme_tool()
+        assert tool['hidden_from'] == ['agent_loop', 'foreman']
+        assert mcp._mcp_readme_gate is False                    # foreman never sees it → no deadlock
+        # round-trip handler (agent_loop) still returns *something* safe
+        assert mcp._mcp_handlers['read_me_first']({}) == 'public only'
+
+    def test_same_audience_reregistration_replaces_body(self):
+        mcp.add_mcp_readme('v1').audience(['external'])
+        mcp.add_mcp_readme('v2').audience(['external'])
+        tool = self._readme_tool()
+        assert tool['readme_bodies'] == [{'audience': ['external'], 'body': 'v2'}]
+
+    def test_handler_returns_agent_loop_body_when_present(self):
+        mcp.add_mcp_readme('for external').audience(['external'])
+        mcp.add_mcp_readme('for the loop').audience(['agent_loop'])
+        assert mcp._mcp_handlers['read_me_first']({}) == 'for the loop'
 
 
 # ---------------------------------------------------------------------------

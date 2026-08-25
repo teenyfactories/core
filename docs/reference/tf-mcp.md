@@ -60,19 +60,33 @@ Filing conventions for this agent's tools:
 """)
 ```
 
-This registers a `read_me_first` tool (returns the body verbatim) and flags the agent's
-catalog with `readme_gate: true`. The tool's **description is fixed** ("Read this FIRST…")
-— you supply only the body (what the tool returns). One per agent; calling it again
-replaces the body. An agent that only calls `add_mcp_readme` (no `add_mcp_server`) still
-publishes.
+This registers a `read_me_first` tool and flags the agent's catalog with `readme_gate:
+true`. The tool's **description is fixed** ("Read this FIRST…") — you supply only the body.
+An agent that only calls `add_mcp_readme` (no `add_mcp_server`) still publishes.
+
+**Per-audience bodies (`.audience([...])`).** Chain `.audience()` (same surface tokens as
+tool scoping — `external` / `foreman` / `agent_loop`, alias `internal`) to serve *different*
+briefing text to different surfaces — e.g. an external product how-to vs. an internal
+agent-loop guide:
+
+```python
+tf.add_mcp_readme(EXTERNAL_HOWTO).audience(['external'])   # Claude-in-PowerPoint / research
+tf.add_mcp_readme(INTERNAL_GUIDE).audience(['internal'])   # foreman + agent loops
+```
+
+Omit `.audience()` for one body shared by every surface. A later call with the **same**
+audience replaces that body. The bodies ride on the single `read_me_first` catalog entry as
+a `readme_bodies` list; each surface **serves its own body straight from the catalog** (the
+briefing is static text — it is never round-tripped to the agent, so it works even when the
+agent is stopped). A surface an audience explicitly names wins over the all-surfaces default.
 
 **Enforcement differs by consumer:**
 
 | Consumer | Behaviour |
 |---|---|
-| **Foreman chat** | **Gated** — the agent's other tools are blocked (per conversation) until `read_me_first` is called; the blocked call returns `"Call the _read_me_first() tool first — …"`. Enforcement is orchestrator-side, keyed on the conversation session. |
-| **External MCP clients** (`/api/mcp`) | **Not gated** — the fixed description instructs them to read it first (soft). |
-| **Cross-agent LLM loop** (`add_tools_from_agent`) | **Not gated** — the `read_me_first` tool is simply available in the bound set. |
+| **Foreman chat** | **Gated** — the agent's other tools are blocked (per conversation) until `read_me_first` is called; the blocked call returns `"Call the _read_me_first() tool first — …"`. Orchestrator-side, keyed on the conversation session. The gate is set **only if a body targets `foreman`** — an `external`-only readme does NOT gate the foreman (it couldn't list `read_me_first` to ack it, which would deadlock the agent's other tools). |
+| **External MCP clients** (`/api/mcp`) | **Not gated** — the fixed description instructs them to read it first (soft). Served the `external` body. |
+| **Cross-agent LLM loop** (`add_tools_from_agent`) | **Not gated** — `read_me_first` is simply available in the bound set; served the `agent_loop` body. |
 
 **Convention:** the readme is the CANONICAL "how to use these tools" text. An agent's own
 system prompt should **defer to it, not restate it** (avoids two drifting sources of truth).
