@@ -140,7 +140,7 @@ Every `on_state` handler receives the same row dict:
 
 There is **one** wake channel for agent dispatch: `tf_data_changed`. The `factory_data` NOTIFY trigger emits it on every write, with a JSON payload that includes `factory_name`. tf core issues a single global `LISTEN tf_data_changed` and treats any own-factory fire purely as an **advisory "poll now" wake** — it never delivers or routes work, and the only payload field core consults is `factory_name` (collection/state for the actual work come from the poll query, not the payload).
 
-No per-state channel, no client-side hashing (as above) — concretely, plaintext `{factory}.{collection}.{state}` channels and `tf_state_<md5(...)>` channels are not emitted and not subscribed.
+No per-state channel that tf core subscribes to. Plaintext `{factory}.{collection}.{state}` channels are not emitted at all. The hashed `tf_collection_<md5>` / `tf_state_<md5(...)>` channels ARE still emitted by the `factory_data` trigger, but tf core does not subscribe to them — dispatch is poll-based off the single `tf_data_changed` wake, so those hashed emissions are legacy (safe to drop once confirmed no consumer remains).
 
 | Channel | Length | Fires when | Consumer |
 |---|---|---|---|
@@ -323,7 +323,7 @@ def handle(item):
     order_id = item['key']
     tf.log_info(f"validating {order_id}")
     tf.breakpoint(f"about to charge card for {order_id}")  # halts here when scope is 'all' or 'explicit'
-    charge_card(item['value'])
+    charge_card(item['data'])
 ```
 
 Don't include secrets in the message — it's written to `factory_logs` and visible to anyone with logs-read access.

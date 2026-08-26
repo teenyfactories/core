@@ -8,4 +8,5 @@ The tf framework (`import teenyfactories as tf`) is the Python library factory a
 - **tf-mcp** — exposing an agent's capabilities as callable tools.
 - **tf-environment** — secrets, credentials, and configuration available to a running agent.
 - **tf-volumes** — reading and writing files on a factory's attached storage.
+- **tf-guide** — the authoring guide: how the pieces fit into a working factory, with the patterns to reach for.
 - **factory-yaml** — the `factory.yml` manifest format: states, agents, and volumes.

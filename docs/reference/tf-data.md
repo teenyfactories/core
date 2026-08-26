@@ -138,6 +138,8 @@ name = item['data']['filename']
 tf.collection('chunks').where(f"document == '{name}'").get_all()   # parameterized — injection-safe
 ```
 
+**Parse-safe is not the same as injection-safe.** The interpolated value re-enters the DSL tokenizer, so a value containing a quote `'`, backslash `\`, or bracket `[` `]` raises `QueryFilterError` at `.where()` (a surfaced error, not swallowed) — even though the query would be SQL-injection-safe if it parsed. When you have the row key, prefer a keyed `.get(key)`; otherwise validate the value before interpolating it.
+
 However, if `name` is **untrusted end-user input**, parameterization only protects the SQL layer — confining a query to within-factory confidentiality (i.e. not letting a user craft a predicate that surfaces rows they shouldn't see) is the **factory author's responsibility**. Validate/scope untrusted predicate inputs yourself.
 
 **Not yet built** (don't reach for these — they're deferred): `.order_by(...)`, `.min_similarity(...)`, per-group top-N (`top_per`), and `.delete()`. (`or` / grouping *is* built — it's listed above.)
