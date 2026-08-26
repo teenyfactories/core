@@ -35,7 +35,6 @@ from datetime import datetime, timezone
 from . import config, db
 from .logging import log_debug, log_warn
 
-
 # Janitor cadence: per pod, every ~30 seconds during run_pending.
 _JANITOR_INTERVAL_SECONDS = 30.0
 _last_janitor_tick: float = 0.0
@@ -48,15 +47,17 @@ DEFAULT_CLAIM_DURATION_SECONDS = 3600.0
 
 # ── Worker identity ─────────────────────────────────────────────────────────
 
+
 def _worker_id() -> str:
     """The claimed_by value stamped on every claim. k8s pod name (HOSTNAME)
     in production; falls back to a process-local string in dev environments
     where HOSTNAME might be unset or non-unique. Uniqueness in dev is a
     known gap (deferred — see roadmap)."""
-    return os.environ.get('HOSTNAME', '') or f"pid-{os.getpid()}"
+    return os.environ.get("HOSTNAME", "") or f"pid-{os.getpid()}"
 
 
 # ── Hash derivation ─────────────────────────────────────────────────────────
+
 
 def _normalize_timestamp(ts) -> str:
     """Render a Postgres TIMESTAMPTZ to a stable ISO 8601 string with explicit
@@ -64,14 +65,14 @@ def _normalize_timestamp(ts) -> str:
     same hash, regardless of psycopg2 driver / datetime quirks. Always emit
     UTC offset (`+00:00`)."""
     if ts is None:
-        return ''
+        return ""
     if isinstance(ts, datetime):
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
         else:
             ts = ts.astimezone(timezone.utc)
         # ISO 8601 with microseconds; '+00:00' offset.
-        return ts.strftime('%Y-%m-%dT%H:%M:%S.%f%z')
+        return ts.strftime("%Y-%m-%dT%H:%M:%S.%f%z")
     return str(ts)
 
 
@@ -81,17 +82,18 @@ def hash_claim_key(collection: str, key: str, state: str, state_changed_at) -> s
     state-entry moment compute the SAME hash — that's the basis for the
     INSERT ON CONFLICT atomic-claim guarantee."""
     parts = [
-        config.FACTORY_NAME or '',
+        config.FACTORY_NAME or "",
         collection,
         key,
         state,
         _normalize_timestamp(state_changed_at),
     ]
-    blob = '|'.join(parts).encode('utf-8')
+    blob = "|".join(parts).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()
 
 
 # ── DB ops ─────────────────────────────────────────────────────────────────
+
 
 def _claim_cursor():
     """Fresh cursor on the process-wide shared connection (teenyfactories.db).
@@ -99,8 +101,7 @@ def _claim_cursor():
     return db.cursor()
 
 
-def try_claim(collection: str, key: str, state: str, state_changed_at,
-              ttl_seconds: float) -> bool:
+def try_claim(collection: str, key: str, state: str, state_changed_at, ttl_seconds: float) -> bool:
     """Attempt to claim the (coll, key, state-cycle) tuple. Returns True if
     we acquired the claim, False if another worker already holds it OR the
     source row has moved on (state changed / state_changed_at advanced).
@@ -126,11 +127,11 @@ def try_claim(collection: str, key: str, state: str, state_changed_at,
     """
     claim_key = hash_claim_key(collection, key, state, state_changed_at)
     claim_data = {
-        'collection':              collection,
-        'key':                     key,
-        'source_state':            state,
-        'source_state_changed_at': _normalize_timestamp(state_changed_at),
-        'claimed_by':              _worker_id(),
+        "collection": collection,
+        "key": key,
+        "source_state": state,
+        "source_state_changed_at": _normalize_timestamp(state_changed_at),
+        "claimed_by": _worker_id(),
     }
     try:
         cursor = _claim_cursor()
@@ -155,9 +156,15 @@ def try_claim(collection: str, key: str, state: str, state_changed_at,
             """,
             (
                 # CTE params: source-row predicate
-                config.FACTORY_NAME, collection, key, state, state_changed_at,
+                config.FACTORY_NAME,
+                collection,
+                key,
+                state,
+                state_changed_at,
                 # INSERT params: claim row
-                config.FACTORY_NAME, claim_key, _json_dumps(claim_data),
+                config.FACTORY_NAME,
+                claim_key,
+                _json_dumps(claim_data),
                 float(ttl_seconds),
             ),
         )
@@ -165,8 +172,7 @@ def try_claim(collection: str, key: str, state: str, state_changed_at,
         won = row is not None
         if won:
             log_debug(
-                f"claim ACQUIRED {collection}/{key} state={state} "
-                f"key={claim_key[:8]}… ttl={int(ttl_seconds)}s"
+                f"claim ACQUIRED {collection}/{key} state={state} " f"key={claim_key[:8]}… ttl={int(ttl_seconds)}s"
             )
         else:
             log_debug(
@@ -201,15 +207,12 @@ def release_claim(collection: str, key: str, state: str, state_changed_at) -> No
             """,
             (config.FACTORY_NAME, claim_key, _worker_id()),
         )
-        log_debug(
-            f"claim RELEASED {collection}/{key} state={state} key={claim_key[:8]}…"
-        )
+        log_debug(f"claim RELEASED {collection}/{key} state={state} key={claim_key[:8]}…")
     except Exception as e:
         # Release failure is not fatal — janitor will reap on TTL.
         db.invalidate_if_dead(e)
         log_warn(
-            f"claim DELETE failed for {collection}/{key} state={state}: {e} "
-            f"— janitor will reap on lease expiry"
+            f"claim DELETE failed for {collection}/{key} state={state}: {e} " f"— janitor will reap on lease expiry"
         )
 
 
@@ -247,9 +250,15 @@ def janitor_sweep_if_due() -> None:
             f"{sorted({r[0] for r in reaped if r and r[0]})}"
         )
         # Wake polling workers so reaped rows get re-picked-up even in
-        # otherwise-idle factories. Use the same global channel run_pending
-        # listens on.
-        cursor.execute('NOTIFY tf_data_changed')
+        # otherwise-idle factories. MUST carry a {"factory_name": ...} payload:
+        # base._drain_notifications only treats a NOTIFY as a poll trigger when
+        # the payload's factory_name matches this factory — a bare payload-less
+        # NOTIFY matches nowhere, so the wake would be a no-op and reaped rows
+        # would wait out the full safety-poll interval.
+        cursor.execute(
+            "SELECT pg_notify('tf_data_changed', %s)",
+            (_json_dumps({"factory_name": config.FACTORY_NAME}),),
+        )
     except Exception as e:
         db.invalidate_if_dead(e)
         log_warn(f"janitor sweep failed (will retry on next tick): {e}")
@@ -257,6 +266,8 @@ def janitor_sweep_if_due() -> None:
 
 # ── tiny json helper to avoid import cycle ──────────────────────────────────
 
+
 def _json_dumps(obj) -> str:
     import json
-    return json.dumps(obj, separators=(',', ':'))
+
+    return json.dumps(obj, separators=(",", ":"))
