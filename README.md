@@ -19,6 +19,7 @@ while True:
 | | |
 |---|---|
 | [`python/`](python/) | The `teenyfactories` library. **MIT open source.** `pip install teenyfactories`. Full library docs in [`python/README.md`](python/README.md) — also the PyPI page. |
+| [`nodejs/`](nodejs/) | Placeholder for the JavaScript port. See [`nodejs/README.md`](nodejs/README.md). Currently not implemented; Python implementation available. |
 | `ghcr.io/teenyfactories/agent:dev` | Container base image with the library pre-installed. Every factory agent runs on this. Built from `python/Dockerfile.build`. |
 
 ## What sits around it

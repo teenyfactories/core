@@ -101,11 +101,14 @@ One flat block, resolved once per graph change against the edge's projection. Ev
 |---|---|---|
 | `color` | `#6b7280` | line colour |
 | `width` | `2` | line width |
+| `linecap` | `round` | endcap of the base thread — `round` \| `butt` \| `square` (SVG `stroke-linecap`) |
+| `linejoin` | `round` | corner join on curved/segmented threads — `round` \| `miter` \| `bevel` (SVG `stroke-linejoin`) |
 | `start_anchor` | `perimeter` | where the line docks at the SOURCE node — `perimeter` \| `center` |
 | `end_anchor` | `perimeter` | where the line docks at the TARGET node — `perimeter` \| `center` |
 | `arrow` | `true` | draw a target-end arrowhead |
 | `offset_start` | `0` | px inset at the source perimeter (moot when `start_anchor: center`) |
 | `offset_end` | `0` | px inset at the target perimeter (moot when `end_anchor: center`) |
+| `secondary_line` | — | optional second stroke on the SAME geometry (see below) |
 
 **`center` vs `perimeter`:** `center` docks the line at the node's centre point (arrowhead-less waypoints like state pills read best this way); `perimeter` docks at the node boundary. When `bundle_links` is on, a `perimeter` end auto-uses the node's flow **port** (its in/out hemisphere) instead of the plain radius point.
 
@@ -120,6 +123,25 @@ edge_style:
 ```
 
 The arrowhead marker itself is drawn in a single global colour, so it does not follow a per-edge `edge_style.color`; the line body does.
+
+**Secondary line (`edge_style.secondary_line`)** — a second `<path>` drawn along the SAME edge geometry as the base thread, with its own stroke props. Turns two-path effects into config rather than bespoke code:
+
+| key | meaning |
+|---|---|
+| `color` | stroke colour (omit to inherit the base thread colour) |
+| `width` | stroke width |
+| `dasharray` | SVG `stroke-dasharray` (e.g. `"0.1 11"` → dots at pitch 11) |
+| `linecap` | endcap (default `round`) — `round` makes dashes into beads/dots; `butt` \| `square` for flat ends |
+| `linejoin` | corner join (default `round`) — `round` \| `miter` \| `bevel` |
+| `dashoffset` | phase offset (for alternating patterns) |
+| `opacity` | stroke opacity (omit to inherit the base thread opacity) |
+
+```yaml
+edge_style:
+  secondary_line: { color: "#1a1a1a", width: 1, opacity: 1 }   # double-line: bg knockout down the middle
+```
+
+Recipes: **double-line** `{ color: <canvas bg>, width: 1, opacity: 1 }` (a solid bg-colour knockout splits the base thread into two rails) · **pearls** `{ width: 4, dasharray: "0.1 11", linecap: round }` · **alternating shade** base `dasharray: "9 9"` + `secondary_line: { dasharray: "9 9", dashoffset: 9, color: <2nd> }`. The base thread carries the arrow; the secondary line never does. Cross-agent tool-wiring edges (`uses_tools_from_agent`, drawn by the factory-edit graph) get a built-in **double-line** automatically (no config needed): a solid 1px line in the canvas background colour down the middle, fully opaque so it reads as two thin parallel rails — the distinction is SHAPE, not colour.
 
 ### Styling expressions
 

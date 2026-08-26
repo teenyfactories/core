@@ -30,13 +30,18 @@ fix was shipped). A genuine rewrite of the row (which bumps ``updated_at``)
 is treated as fresh work and resets the count.
 
 Transport:
-  * Dispatch is POLL-based. A poll scans ``factory_data`` for rows in each
-    subscribed ``(collection, state)`` ordered by ``(state_changed_at, key)``.
+  * Dispatch is POLL-based and PREEMPTIVE. Each pass runs ONE unit of work
+    then rechecks from the top, so a newly-ready higher-priority unit jumps
+    the queue mid-drain. Order: MCP requests (``_mcp_*``) first, then scheduled
+    jobs ⨝ state handlers unified by ``.priority()`` (lower runs sooner), then
+    ``(state_changed_at, key)`` FIFO within a handler. The finder returns the
+    single best ready+unclaimed row in one query (``peek_next``).
   * NOTIFY on the single global ``tf_data_changed`` channel is an advisory
-    wake ONLY — it never delivers or routes work. A poll pass runs when an
-    own-factory NOTIFY was drained this tick, OR ``_SAFETY_POLL_INTERVAL_SEC``
-    has elapsed since the last poll, OR it is the first tick. Otherwise
-    ``run_pending()`` issues zero queries.
+    wake ONLY — it never delivers or routes work. The DB side of a pass runs
+    when an own-factory NOTIFY was drained this tick, OR
+    ``_SAFETY_POLL_INTERVAL_SEC`` has elapsed since the last poll, OR it is the
+    first tick. Otherwise the pass touches no DB and only drains due scheduled
+    jobs (the in-memory heartbeat) — ``run_pending()`` issues zero queries.
   * ``tf.sleep`` is a chunked wrapper around ``time.sleep`` that wakes on
     SIGTERM/SIGINT (slice ≈ 100 ms). Observed dispatch latency is still
     the factory author's own ``tf.sleep(N)`` loop cadence.
@@ -47,7 +52,8 @@ Lifecycle:
     2. First ``tf.run_pending()``: ``_first_tick_init`` drains pending
        registrations (opens connection, LISTENs ``tf_data_changed``), prints
        the banner, publishes the MCP catalog, then forces a first poll.
-    3. Every tick: scheduled jobs → drain NOTIFY → poll if due.
+    3. Every tick: drain NOTIFY → one unified preemptive pass (scheduled ⨝
+       state; the DB side only when a poll is due).
 """
 
 import collections as _collections
@@ -122,6 +128,48 @@ _pending_registrations: List[dict] = []
 _initialized = False
 
 
+# =============================================================================
+# Preemptive tiered dispatch — constants + scheduled-job .priority()
+#
+# The poll loop runs ONE unit of work, then rechecks from the top, so a
+# newly-ready higher-priority unit preempts the rest of a drain. Two tiers:
+#   0. MCP requests  (`_mcp_*` collections) — always first, FIFO.
+#   1. Scheduled jobs ⨝ state handlers — unified by .priority() (lower = sooner).
+# =============================================================================
+
+# Reserved collection prefix for MCP tool-call request rows (`_mcp_<tool>`).
+# Tier-0: always dispatched before ordinary state work, FIFO by state_changed_at.
+_MCP_COLLECTION_PREFIX = "_mcp_"
+
+# Sentinel "no scheduled job due" bound: every real .priority() is < this, so a
+# state row is never rejected for lack of a competing scheduled job.
+_INF_PRIORITY = 1 << 30
+
+# Hard cap on units dispatched in ONE pass. A handler that re-queues its own row
+# (bumping state_changed_at → a fresh strike key each time) would otherwise spin
+# the pass forever; the cap degrades that to "resume next tick". Far above any
+# real ready-backlog.
+_MAX_UNITS_PER_PASS = 10000
+
+
+def _job_priority(self, n: int = 0):
+    """Order this scheduled job against OTHER due scheduled jobs AND state
+    handlers competing in the same poll. `nice` semantics: LOWER runs sooner,
+    default 0. Symmetric with tf.on_state(...).priority().
+
+    Usage: tf.on_schedule.every(10).seconds.priority(-1).do(fn)
+    """
+    self._tf_priority = int(n)
+    return self
+
+
+# The `schedule` lib's Job has no __slots__, so we attach .priority() (and the
+# _tf_priority it sets) by monkeypatching the class at import. Jobs are always
+# read with getattr(j, "_tf_priority", 0), so a job built before this ran (or via
+# a path that skips .priority()) is treated as priority 0.
+_schedule.Job.priority = _job_priority
+
+
 def _get_provider():
     """Get or create the PostgreSQL provider instance.
 
@@ -151,9 +199,10 @@ class SubscriptionBuilder:
         @tf.on_state(collection, state).priority(-1).do(handler)
         @tf.on_state(collection, state).delay(seconds=5).claim_duration(minutes=30).do(handler)
 
-    `.priority(n)` orders this handler against OTHER state handlers with rows
-    ready in the same poll: LOWER runs sooner, default 0, negative jumps ahead
-    (see `.priority` below). Scheduled jobs always run before state regardless.
+    `.priority(n)` orders this handler against OTHER state handlers AND due
+    scheduled jobs in the same poll: LOWER runs sooner, default 0, negative jumps
+    ahead (see `.priority` below). Scheduled jobs carry the same `.priority()`
+    and compete in the same order — MCP requests (`_mcp_*`) always run first.
 
     `.delay(seconds=N, minutes=N, hours=N)` defers dispatch until
     `state_changed_at + delta <= NOW()`. Strict cancellation — if the row
@@ -194,14 +243,16 @@ class SubscriptionBuilder:
         return self
 
     def priority(self, n: int = 0):
-        """Order this STATE handler relative to OTHER state handlers when several
-        have rows ready in the same poll. `nice` semantics: LOWER runs sooner,
-        default 0 (normal). Negative jumps ahead of the default pack
-        (`.priority(-1)`), positive drops behind it (background sweeps). Does NOT
-        reorder scheduled jobs (they always run as a block before state, and
-        re-run between every state row) nor rows WITHIN this handler (those stay
-        oldest-first FIFO). Cooperative, not preemptive: priority picks which
-        handler starts next, it never interrupts one already running."""
+        """Order this STATE handler relative to OTHER state handlers AND due
+        scheduled jobs competing in the same poll. `nice` semantics: LOWER runs
+        sooner, default 0 (normal). Negative jumps ahead of the default pack
+        (`.priority(-1)`), positive drops behind it (background sweeps). Scheduled
+        jobs (`tf.on_schedule...priority(n)`) share this same order; MCP requests
+        (`_mcp_*`) are a higher tier and always run first. Does NOT reorder rows
+        WITHIN this handler (those stay oldest-first FIFO). PREEMPTIVE between
+        units — after each unit the loop rechecks from the top, so a newly-ready
+        higher-priority unit runs before the rest of a drain — but never
+        interrupts a handler already running (cooperative single thread)."""
         self._priority = int(n)
         return self
 
@@ -358,25 +409,34 @@ def _log_startup_banner():
         log_error(f"startup banner failed (continuing): {e}")
 
 
-def _run_scheduled_jobs():
-    """Run all due on_schedule jobs via the native `schedule` lib, guarded.
+def _get_next_scheduled_job():
+    """The single best DUE scheduled job as ``(priority, run)`` — or None.
 
-    Called at the top of each tick AND between every state row in `_poll_pass`
-    — that interleave is what lets a due scheduled job fire DURING a long state
-    drain instead of after it. Cheap when nothing is due (per-job `should_run`
-    checks, no I/O), so re-running it per row is fine. The native lib owns
-    cadence + missed-tick coalescing; we do not reorder scheduled jobs (no
-    priority among them — they run as a block before state)."""
+    Picks the minimum by ``(.priority(), next_run)``: lower `.priority()` runs
+    sooner, ties broken by soonest scheduled time. ``run`` executes exactly ONE
+    job (the native ``Job.run()`` also reschedules it), guarded so a raising job
+    can't kill the pass. Returning the priority lets the caller compare it
+    against the best ready STATE row and run whichever wins — this is what
+    unifies scheduled + state under one priority order (replacing the old
+    "scheduled always run as a block before state" behaviour)."""
     import traceback as _tb
 
-    try:
-        _schedule.run_pending()
-    except Exception as e:
-        log_error(f"Scheduled job raised: {e}\n{_tb.format_exc()}")
+    due = [j for j in _schedule.jobs if j.should_run]
+    if not due:
+        return None
+    job = min(due, key=lambda j: (getattr(j, "_tf_priority", 0), j.next_run))
+
+    def run():
+        try:
+            job.run()
+        except Exception as e:
+            log_error(f"Scheduled job raised: {e}\n{_tb.format_exc()}")
+
+    return (getattr(job, "_tf_priority", 0), run)
 
 
 def run_pending():
-    """Drain scheduled jobs, drain NOTIFY, poll if due.
+    """Drain NOTIFY, then run one unified preemptive pass (scheduled ⨝ state).
 
     Factories call this in a loop:
         while True:
@@ -388,9 +448,10 @@ def run_pending():
     arrives the flag is observed at the end of this function and at the
     next `tf.sleep` slice, raising SystemExit(0) for clean teardown.
 
-    A poll runs only when an own-factory NOTIFY was drained, OR
-    _SAFETY_POLL_INTERVAL_SEC has elapsed, OR it is the first tick.
-    Otherwise this issues zero queries.
+    Every tick runs one dispatch pass; the DB side of it (the peek finder) runs
+    only when an own-factory NOTIFY was drained, OR _SAFETY_POLL_INTERVAL_SEC has
+    elapsed, OR it is the first tick — otherwise the pass touches no DB and only
+    drains due scheduled jobs (zero queries when idle).
     """
     global _last_poll_ts
 
@@ -405,29 +466,26 @@ def run_pending():
 
     import traceback as _tb
 
-    # Scheduled jobs run every tick, OUTSIDE the poll gate — and again between
-    # every state row inside _poll_pass, so a long state drain can't starve a
-    # due on_schedule job (the fix for [tf:content-research-starves-scheduled-jobs]).
-    _run_scheduled_jobs()
-
     notify_hit = False
     try:
         notify_hit = _drain_notifications()
     except Exception as e:
         log_error(f"NOTIFY drain raised: {e}\n{_tb.format_exc()}")
 
+    # ONE unified dispatch pass every tick. `do_db_poll` gates ONLY the DB side
+    # (the peek finder): it runs on a first tick, an own-factory NOTIFY, or the
+    # safety interval — otherwise the pass touches no DB and just drains due
+    # scheduled jobs (the in-memory heartbeat; zero queries when idle). This
+    # keeps the old idle-efficiency while letting scheduled + state compete by
+    # priority whenever there IS new work to poll. (Cost/spend enforcement is not
+    # here — it lives in cost_clearance.py, gated inside tf.call_llm.)
     now = time.monotonic()
     should_poll = first or notify_hit or (now - _last_poll_ts >= _SAFETY_POLL_INTERVAL_SEC)
+    try:
+        _poll_pass(do_db_poll=should_poll)
+    except Exception as e:
+        log_error(f"Poll pass raised: {e}\n{_tb.format_exc()}")
     if should_poll:
-        # Spend-limit enforcement no longer lives at the poll gate. Cost is
-        # owned by the orchestrator (computed at read; limits enforced via an
-        # HTTP clearance check tf makes BEFORE each LLM call — see
-        # teenyfactories/cost_clearance.py, gated inside tf.call_llm). The poll
-        # loop does no cost work.
-        try:
-            _poll_pass()
-        except Exception as e:
-            log_error(f"Poll pass raised: {e}\n{_tb.format_exc()}")
         _last_poll_ts = time.monotonic()
 
     # Claim janitor — reap stale claims past their lease_expires_at. No-op
@@ -463,6 +521,28 @@ def _iso(ts) -> str:
     return str(ts)
 
 
+def _strike_key(item: dict) -> tuple:
+    """The strike/seen key for a row: (key, state, state_changed_at_iso). Used
+    by both _dispatch (strike accounting) and _poll_pass (per-pass seen set), so
+    the two agree on row identity — keyed on state_changed_at so a same-state
+    re-queue (bumped state_changed_at) reads as fresh work, a pure no-op does not."""
+    return (item.get("key") or "", item.get("state"), _iso(item.get("state_changed_at")))
+
+
+def _age_seconds(state_changed_at) -> float:
+    """Seconds since a row entered its state. Used to gate delayed handlers in
+    Python (mirrors the finder's SQL delay predicate). Unknown/naive timestamps
+    fall back to 'infinitely old' so a handler is never wrongly held back."""
+    if state_changed_at is None or not hasattr(state_changed_at, "tzinfo"):
+        return float("inf")
+    from datetime import datetime, timezone
+
+    ref = state_changed_at
+    if ref.tzinfo is None:
+        ref = ref.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - ref).total_seconds()
+
+
 def _evict_strikes():
     """Insertion-order cap. Assignment to an existing OrderedDict key does
     NOT reorder it, so eviction drops the oldest first-seen entry."""
@@ -484,7 +564,7 @@ def _dispatch(entries: List[dict], item: dict):
     if coll is None or state is None:
         return
 
-    rk = (item.get("key") or "", state, _iso(item.get("state_changed_at")))
+    rk = _strike_key(item)
     n = _strikes.get(rk)
 
     if n == _PARKED:
@@ -563,47 +643,108 @@ def _dispatch(entries: List[dict], item: dict):
 # =============================================================================
 
 
-def _poll_pass():
-    """One inline pass over every subscribed (collection, state), served in
-    `.priority()` order, re-running due scheduled jobs between every row.
+def _subscription_rows() -> List[tuple]:
+    """The finder's input: one ``(collection, state, tier, priority, delay)`` per
+    subscribed (collection, state). ``tier`` 0 = MCP request collections
+    (``_mcp_*``, always-first FIFO), 1 = everything else. ``priority`` / ``delay``
+    are the MIN across that key's entries (one handler per key is the contract,
+    so the min is just that handler's value)."""
+    rows: List[tuple] = []
+    for (coll, state), entries in _handlers.items():
+        tier = 0 if coll.startswith(_MCP_COLLECTION_PREFIX) else 1
+        pri = min((e.get("priority") or 0) for e in entries)
+        dly = min((e.get("delay_seconds") or 0.0) for e in entries)
+        rows.append((coll, state, tier, pri, dly))
+    return rows
 
-    Handler ORDER: `.priority()` nice-semantics — LOWER priority number runs
-    sooner, default 0; ties keep registration (FIFO) order via `sorted()`'s
-    stability. Scheduled jobs are NOT ordered here — `_run_scheduled_jobs()` runs
-    them as a block after each state row so a long drain can't starve a due one.
 
-    Row ORDER within a handler: unchanged — oldest first from the provider.
-    Live (non-delayed) entries share one `fetch_rows` scan. Each delayed entry
-    runs its own `fetch_due_rows` (the delay is a SQL predicate, no cursor).
-    In-retry rows interleave in natural state_changed_at position (accepted
-    head-of-line tradeoff; slow-failing handlers should set their own I/O
-    timeouts). Cooperative single thread: a handler that itself blocks still
-    holds the thread until it returns — priority picks the next unit, never
-    preempts a running one.
+def _due_entries(entries: List[dict], item: dict) -> List[dict]:
+    """Entries whose delay has actually elapsed for this row. The finder bounds
+    on the MIN delay across a key's entries, so a returned row may satisfy a
+    short-delay handler but not a longer-delayed sibling — this filter keeps each
+    handler's own delay honoured. (With the one-handler-per-key contract this is
+    trivially the whole list, but it stays correct if that ever relaxes.)"""
+    if not entries:
+        return []
+    age = _age_seconds(item.get("state_changed_at"))
+    return [e for e in entries if age >= (e.get("delay_seconds") or 0.0)]
+
+
+def _poll_pass(do_db_poll: bool = True):
+    """One tiered, fully-preemptive dispatch pass: run ONE unit, then recheck
+    from the top so a newly-ready higher-priority unit preempts the rest of a
+    drain (fixes [tf:priority-not-preemptive-mid-drain]).
+
+    Tiers, highest first:
+      0. MCP requests (``_mcp_*`` collections) — always first, FIFO.
+      1. Scheduled jobs ⨝ state handlers — unified by ``.priority()`` (lower =
+         sooner). We read the best due scheduled job's priority FIRST (in-memory,
+         free) and use it as an upper BOUND: the DB finder returns the best state
+         row that BEATS that bound (MCP tier ignores the bound). Whichever wins —
+         scheduled job or state row — runs, then we loop.
+
+    # GOAL: the finder does check + claim in ONE db call. TODAY it is two — a
+    # read-only peek (provider.peek_next) then the proven claims.try_claim inside
+    # _dispatch. Fusing them (SQL-computed claim key + delete-by-tuple release) is
+    # Stage 2 of the register entry, gated on a PG dual-test + db/security review.
+
+    ``do_db_poll=False`` (between polls, no NOTIFY) skips the DB finder entirely
+    and only drains due scheduled jobs — the in-memory heartbeat, zero queries
+    when idle.
+
+    Cooperative single thread: a running handler holds the thread until it
+    returns; priority picks the NEXT unit, it never preempts a running one.
     """
-    if not _handlers:
+    if not _handlers and not _schedule.jobs:
         return
-    provider = _get_provider()
-    # Lower priority number = sooner. min() over the group is just the (single)
-    # handler's priority; sorted() is stable so equal-priority handlers keep
-    # their registration order (the FIFO tiebreak).
-    ordered = sorted(
-        _handlers.items(),
-        key=lambda kv: min((e.get("priority") or 0) for e in kv[1]),
-    )
-    for (coll, state), entries in ordered:
-        live = [e for e in entries if not (e.get("delay_seconds") or 0.0)]
-        if live:
-            for item in provider.fetch_rows(coll, state):
-                _dispatch(live, item)
-                _run_scheduled_jobs()  # yield to due scheduled jobs mid-drain
-        for entry in entries:
-            d = entry.get("delay_seconds") or 0.0
-            if d <= 0:
+    provider = _get_provider() if do_db_poll else None
+
+    # A row attempted THIS pass that DIDN'T leave its state (clean no-op, or
+    # already PARKED — _dispatch no-ops both) is still the DB's best candidate,
+    # so a naive re-peek returns it forever. `seen` (its strike key) detects the
+    # second offer; `exclude` (its identity tuple) then removes it from further
+    # peeks so LOWER-priority work behind it still runs this pass — critically,
+    # a parked row at the queue head must NOT block everything behind it. Each
+    # stuck row is offered at most twice (dispatch once, then excluded), so the
+    # exclude list holds only genuinely-stuck rows and the pass still terminates
+    # (peek eventually returns None). One-attempt-per-pass strike semantics are
+    # preserved: a no-op row is dispatched exactly once per pass.
+    seen: set = set()
+    exclude: list = []  # (collection, key, state, state_changed_at) to skip in peek
+    units = 0
+    while units < _MAX_UNITS_PER_PASS:
+        sch = _get_next_scheduled_job()
+        bound = sch[0] if sch is not None else _INF_PRIORITY
+
+        row = None
+        if do_db_poll and _handlers:
+            row = provider.peek_next(_subscription_rows(), bound, exclude)
+
+        if row is not None:
+            rk = _strike_key(row)
+            if rk in seen:
+                # Already attempted this pass and still here → exclude it (using
+                # the row's OWN state_changed_at datetime, which round-trips PG
+                # equality exactly) and re-peek. Do NOT re-dispatch it.
+                exclude.append((row["collection"], row["key"], row["state"], row["state_changed_at"]))
                 continue
-            for item in provider.fetch_due_rows(coll, state, d):
-                _dispatch([entry], item)
-                _run_scheduled_jobs()
+            due = _due_entries(_handlers.get((row["collection"], row["state"]), []), row)
+            if due:
+                seen.add(rk)
+                _dispatch(due, row)
+                units += 1
+                continue
+            # No entry's delay has elapsed (shouldn't happen — the finder bounds
+            # on min-delay). Exclude to avoid a spin, then re-peek.
+            exclude.append((row["collection"], row["key"], row["state"], row["state_changed_at"]))
+            continue
+
+        # No state row won this round → run the best scheduled job, else done.
+        if sch is not None:
+            sch[1]()
+            units += 1
+            continue
+        return
 
 
 def _drain_notifications() -> bool:
