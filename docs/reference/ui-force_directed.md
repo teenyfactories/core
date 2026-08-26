@@ -138,7 +138,7 @@ edge_style:
   secondary_line: { color: "#1a1a1a", width: 1, opacity: 1 }   # double-line: bg knockout down the middle
 ```
 
-Recipes: **double-line** `{ color: <canvas bg>, width: 1, opacity: 1 }` on a ~3px base (a solid bg-colour knockout splits the base thread into two rails) · **pearls** `{ width: 4, dasharray: "0.1 11", linecap: round }` · **alternating shade** base `dasharray: "9 9"` + `secondary_line: { dasharray: "9 9", dashoffset: 9, color: <2nd> }`. The base thread carries the arrow; the secondary line never does. Cross-agent tool-wiring edges (`uses_tools_from_agent`, drawn by the factory-edit graph) get a built-in **double-line** automatically (no config needed): a solid 1px line in the canvas background colour down the middle of a 3px base, fully opaque so it reads as two ~1px parallel rails — the distinction is SHAPE, not colour.
+Recipes: **double-line** `{ color: <canvas bg>, width: 1, opacity: 1 }` (a solid bg-colour knockout splits the base thread into two rails) · **pearls** `{ width: 4, dasharray: "0.1 11", linecap: round }` · **alternating shade** base `dasharray: "9 9"` + `secondary_line: { dasharray: "9 9", dashoffset: 9, color: <2nd> }`. The base thread carries the arrow; the secondary line never does. Cross-agent tool-wiring edges (`uses_tools_from_agent`, drawn by the factory-edit graph) get a built-in **double-line** automatically (no config needed): a solid 1px line in the canvas background colour down the middle, fully opaque so it reads as two thin parallel rails — the distinction is SHAPE, not colour.
 
 ### Styling expressions
 
