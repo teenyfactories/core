@@ -27,9 +27,9 @@ Writing a row into a `(collection, state)` makes every subscriber to that pair p
 | Group | Names |
 |---|---|
 | Pub/sub | `on_state`, `run_pending` (the only pub/sub primitive — no message bus) |
-| Data | `collection` (`.set`, `.add`, `.get`, `.get_all`, `.remove`, `.count`, `.exists`, `.first`, `.state`, `.where`, `.limit`, `.vector_search`), `embed` |
+| Data | `collection` (`.set`, `.add`, `.get`, `.get_all`, `.remove`, `.count`, `.exists`, `.first`, `.state`, `.where`, `.limit`, `.vector_search`, `.set_vectors`), `embed`, `chunk` |
 | LLM | `llm` (fluent builder — `.ask` / `.run_agent_loop`), `call_llm` (LEGACY) |
-| MCP | `add_mcp_server`, `add_mcp_tool` (tool `name` must match `^[a-z0-9_]{1,35}$` — it becomes a `_mcp_<name>` collection + NOTIFY channel; a bad name is logged as an ERROR and skipped) |
+| MCP | `add_mcp_server`, `add_mcp_tool`, `add_mcp_readme` (tool `name` must match `^[a-z0-9_]{1,35}$` — it becomes a `_mcp_<name>` collection + NOTIFY channel; a bad name is logged as an ERROR and skipped) |
 | Schedule | `on_schedule.every(N).<unit>.do(handler)` |
 | Secrets / files | `secrets`, `bucket_store` (+ `BucketStoreError` family) |
 | Logging | `log_debug`, `log_info`, `log_warn`, `log_error`, `log_persona` |

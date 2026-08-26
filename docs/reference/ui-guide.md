@@ -18,7 +18,7 @@ Sortable/paginated rows → `ui-table` · grid of editable cells addressed by (r
 
 **ui-detail_list** — read-only label→value record, DataRef-aware (no `data:` needed if a subject is published) or own `data:`. Replaces stacked read-only text inputs in a detail modal. Not editable, not multi-record.
 
-**ui-textarea** — multi-line text, saves on blur (state-only patch). Notes/descriptions. Not single-line (`ui-text_input`) or code. In a footer `on_click` with no `data_field`, auto-attaches the FULL DataRef snapshot — scope with `data_field`.
+**ui-textarea** — multi-line text, can save on blur via explicit `on_blur` handler (state-only patch). Notes/descriptions. Not single-line (`ui-text_input`) or code. In a footer `on_click` with no `data_field`, auto-attaches the FULL DataRef snapshot — scope with `data_field`.
 
 **ui-text_input** — single-line text/email/password/number, short fields only. Field paths resolve against current scope — nested contexts may need a full dot-path.
 
