@@ -306,7 +306,7 @@ tf.log_persona("First-person message for UI speech bubbles")
 tf.breakpoint("about to do the risky thing")   # halt this agent until the operator clicks Continue
 ```
 
-`tf.breakpoint(message)` is a single-call halt — **a cheap no-op when the factory's debug mode is off**, safe to leave in production code. When on, it writes a `level='breakpoint'` row to `factory_logs` and blocks this agent until the operator clicks **Continue** in the logs panel (or disables debug mode, which auto-releases every halted breakpoint).
+`tf.breakpoint(message)` is a single-call halt — **a cheap no-op when the factory's debug mode is off**, safe to leave in production code. When on, it writes a `level='breakpoint'` row to `factory_logs` and blocks this agent until the operator clicks **Continue** in the logs panel, disables debug mode (which auto-releases every halted breakpoint), or sends SIGTERM/SIGINT (which releases the halt within ~1 s of the next poll).
 
 Per-factory debug mode is toggled from the UI (factory header → **Debug**). There are two scopes:
 
