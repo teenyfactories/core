@@ -43,7 +43,7 @@ Transport:
     first tick. Otherwise the pass touches no DB and only drains due scheduled
     jobs (the in-memory heartbeat) — ``run_pending()`` issues zero queries.
   * ``tf.sleep`` is a chunked wrapper around ``time.sleep`` that wakes on
-    SIGTERM/SIGINT (slice ≈ 100 ms). Observed dispatch latency is still
+    SIGTERM/SIGINT (slice ≈ 1 s, `lifecycle._SLEEP_SLICE_SEC`). Observed dispatch latency is still
     the factory author's own ``tf.sleep(N)`` loop cadence.
 
 Lifecycle:
