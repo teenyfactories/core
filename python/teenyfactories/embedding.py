@@ -111,8 +111,7 @@ def embed(
     if provider is not None or model is not None:
         # LEGACY: kwargs form — debug for now; will become a warn before removal.
         log_debug(
-            "🔢 tf.embed(text, provider=, model=) kwargs are LEGACY — "
-            "migrate to tf.embed(text).provider(p).model(m)"
+            "🔢 tf.embed(text, provider=, model=) kwargs are LEGACY — " "migrate to tf.embed(text).provider(p).model(m)"
         )
     return _Embedding(text, provider, model)
 
@@ -338,6 +337,11 @@ def _embed_ollama(texts: List[str], model: str) -> List[List[float]]:
         response = requests.post(
             f"{base_url}/api/embeddings",
             json={"model": model, "prompt": text},
+            # Bound the call so a wedged/unreachable Ollama can't block the
+            # handler (and everything queued behind it) forever. Tight connect,
+            # generous read — CPU-Ollama embeds are legitimately slow. The raise
+            # rides the normal handler strike path.
+            timeout=(5, 120),
         )
         response.raise_for_status()
         latency_ms = int((time.time() - start) * 1000)

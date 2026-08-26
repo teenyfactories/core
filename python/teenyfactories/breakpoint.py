@@ -41,15 +41,14 @@ import json
 import time
 from typing import Optional
 
-from . import config, db
-
+from . import config, db, lifecycle
 
 # ── Mode cache ─────────────────────────────────────────────────────────────
 # 1s TTL keeps per-tick cost flat (one cached read per dispatch) while
 # letting an enable take effect within 1s. `_wait_for_release` bypasses the
 # cache so disabling a mid-halt mode releases promptly.
-_VALID_SCOPES = ('all', 'explicit')
-_mode_cache = {'value': None, 'expires_at': 0.0}
+_VALID_SCOPES = ("all", "explicit")
+_mode_cache = {"value": None, "expires_at": 0.0}
 
 
 def _debug_mode_scope_uncached() -> Optional[str]:
@@ -58,24 +57,25 @@ def _debug_mode_scope_uncached() -> Optional[str]:
     Returns 'all', 'explicit', or None (off / absent / invalid).
     """
     from .collection import collection as _collection  # lazy
+
     try:
-        row = _collection('_debug').get('mode')
+        row = _collection("_debug").get("mode")
     except Exception:
         return None
     if row is None:
         return None
-    scope = row.get('state')
+    scope = row.get("state")
     return scope if scope in _VALID_SCOPES else None
 
 
 def _debug_mode_scope() -> Optional[str]:
     """1s TTL cached read of the factory's debug-mode scope."""
     now = time.monotonic()
-    if now < _mode_cache['expires_at']:
-        return _mode_cache['value']
+    if now < _mode_cache["expires_at"]:
+        return _mode_cache["value"]
     scope = _debug_mode_scope_uncached()
-    _mode_cache['value'] = scope
-    _mode_cache['expires_at'] = now + 1.0
+    _mode_cache["value"] = scope
+    _mode_cache["expires_at"] = now + 1.0
     return scope
 
 
@@ -83,6 +83,7 @@ def _debug_mode_scope() -> Optional[str]:
 # Not a paradigm violation — we need RETURNING id so the agent can poll its
 # own row. The logging stdlib pipeline (PostgresLogHandler) is fire-and-
 # forget with no return value. See _log_breakpoint docstring.
+
 
 def _log_breakpoint(message: str, *, kind: str, **context) -> Optional[int]:
     """
@@ -104,13 +105,13 @@ def _log_breakpoint(message: str, *, kind: str, **context) -> Optional[int]:
         # state under the key `state`, which would otherwise clobber the
         # 'waiting' halt-state and break the release-poll predicate.
         log_data = {
-            '_debug': {
+            "_debug": {
                 **context,
-                'state': 'waiting',
-                'kind': kind,
-                'agent_name': config.AGENT_NAME,
-                'container_id': config.AGENT_ID or None,
-                'hit_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+                "state": "waiting",
+                "kind": kind,
+                "agent_name": config.AGENT_NAME,
+                "container_id": config.AGENT_ID or None,
+                "hit_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             }
         }
         with conn.cursor() as cur:
@@ -124,8 +125,8 @@ def _log_breakpoint(message: str, *, kind: str, **context) -> Optional[int]:
                     config.FACTORY_NAME,
                     config.AGENT_SLUG or config.AGENT_NAME or None,
                     config.AGENT_ID or None,
-                    'system',
-                    'breakpoint',
+                    "system",
+                    "breakpoint",
                     message,
                     json.dumps(log_data),
                 ),
@@ -139,6 +140,7 @@ def _log_breakpoint(message: str, *, kind: str, **context) -> Optional[int]:
 
 # ── Polling loop ───────────────────────────────────────────────────────────
 
+
 def _wait_for_release(log_id: int) -> None:
     """
     Poll factory_logs row by id every 1s. Return when:
@@ -146,6 +148,11 @@ def _wait_for_release(log_id: int) -> None:
       - scope flipped off (uncached check so disable releases promptly).
     """
     while True:
+        # SIGTERM/SIGINT during a halt must release, else the agent ignores
+        # shutdown until the operator clicks Continue (or k8s escalates to
+        # SIGKILL). Checked each iteration; worst-case ~1s latency via the sleep.
+        if lifecycle.shutting_down():
+            return
         try:
             conn = db.get_connection()
             with conn.cursor() as cur:
@@ -161,8 +168,8 @@ def _wait_for_release(log_id: int) -> None:
         if row is None:
             return  # row deleted out from under us; treat as released
         log_data = row[0] or {}
-        debug = log_data.get('_debug') or {}
-        if debug.get('state') == 'continued':
+        debug = log_data.get("_debug") or {}
+        if debug.get("state") == "continued":
             return
 
         # Uncached scope check — disabling mode mid-halt must release fast.
@@ -173,6 +180,7 @@ def _wait_for_release(log_id: int) -> None:
 
 
 # ── Public + internal halt entry points ─────────────────────────────────────
+
 
 def breakpoint(message: str) -> None:  # noqa: A001 — shadowing builtin is intentional on tf namespace
     """
@@ -189,7 +197,7 @@ def breakpoint(message: str) -> None:  # noqa: A001 — shadowing builtin is int
     """
     if _debug_mode_scope() not in _VALID_SCOPES:
         return
-    log_id = _log_breakpoint(message, kind='explicit')
+    log_id = _log_breakpoint(message, kind="explicit")
     if log_id is None:
         return  # write failed; don't wedge
     _wait_for_release(log_id)
@@ -203,11 +211,11 @@ def _auto_halt(coll: str, state: str, item: dict) -> None:
 
     item is the factory_data row dict from the poll query (has 'key').
     """
-    if _debug_mode_scope() != 'all':
+    if _debug_mode_scope() != "all":
         return
-    row_key = item.get('key') if isinstance(item, dict) else None
+    row_key = item.get("key") if isinstance(item, dict) else None
     msg = f"pre-handler halt: {coll}.{state} key={row_key}"
-    log_id = _log_breakpoint(msg, kind='auto', coll=coll, state=state, row_key=row_key)
+    log_id = _log_breakpoint(msg, kind="auto", coll=coll, state=state, row_key=row_key)
     if log_id is None:
         return
     _wait_for_release(log_id)
