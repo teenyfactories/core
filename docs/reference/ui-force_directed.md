@@ -101,6 +101,7 @@ One flat block, resolved once per graph change against the edge's projection. Ev
 |---|---|---|
 | `color` | `#6b7280` | line colour |
 | `width` | `2` | line width |
+| `linecap` | `round` | endcap of the base thread — `round` \| `butt` \| `square` (SVG `stroke-linecap`) |
 | `start_anchor` | `perimeter` | where the line docks at the SOURCE node — `perimeter` \| `center` |
 | `end_anchor` | `perimeter` | where the line docks at the TARGET node — `perimeter` \| `center` |
 | `arrow` | `true` | draw a target-end arrowhead |
@@ -129,7 +130,7 @@ The arrowhead marker itself is drawn in a single global colour, so it does not f
 | `color` | stroke colour (omit to inherit the base thread colour) |
 | `width` | stroke width |
 | `dasharray` | SVG `stroke-dasharray` (e.g. `"0.1 11"` → dots at pitch 11) |
-| `linecap` | `round` makes dashes into beads/dots |
+| `linecap` | endcap — `round` (default) makes dashes into beads/dots; `butt` \| `square` for flat ends |
 | `dashoffset` | phase offset (for alternating patterns) |
 | `opacity` | stroke opacity (omit to inherit the base thread opacity) |
 
