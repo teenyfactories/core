@@ -131,13 +131,14 @@ The arrowhead marker itself is drawn in a single global colour, so it does not f
 | `dasharray` | SVG `stroke-dasharray` (e.g. `"0.1 11"` → dots at pitch 11) |
 | `linecap` | `round` makes dashes into beads/dots |
 | `dashoffset` | phase offset (for alternating patterns) |
+| `opacity` | stroke opacity (omit to inherit the base thread opacity) |
 
 ```yaml
 edge_style:
   secondary_line: { width: 4, dasharray: "0.1 11", linecap: round }   # string-of-pearls on the base thread
 ```
 
-Recipes: **pearls** `{ width: 4, dasharray: "0.1 11", linecap: round }` · **ladder / knockout** `{ color: <canvas bg>, width: 3, dasharray: "0.1 8", linecap: round }` · **alternating shade** base `dasharray: "9 9"` + `secondary_line: { dasharray: "9 9", dashoffset: 9, color: <2nd> }`. The base thread carries the arrow; the secondary line never does. Cross-agent tool-wiring edges (`uses_tools_from_agent`, drawn by the factory-edit graph) get a built-in grey pearls secondary line automatically — no config needed.
+Recipes: **pearls** `{ width: 4, dasharray: "0.1 11", linecap: round }` · **ladder / knockout** `{ color: <canvas bg>, width: 3, dasharray: "0.1 8", linecap: round }` · **alternating shade** base `dasharray: "9 9"` + `secondary_line: { dasharray: "9 9", dashoffset: 9, color: <2nd> }`. The base thread carries the arrow; the secondary line never does. Cross-agent tool-wiring edges (`uses_tools_from_agent`, drawn by the factory-edit graph) get a built-in pearls secondary line automatically (no config needed); its `color` is omitted so the beads inherit the base thread's colour — the distinction is SHAPE, not colour.
 
 ### Styling expressions
 
