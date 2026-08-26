@@ -122,7 +122,7 @@ class PostgresProvider:
     # row that arrives mid-drain jump the queue — see peek_next below.)
     # =========================================================================
 
-    def peek_next(self, subs: List[tuple], bound: int) -> Optional[dict]:
+    def peek_next(self, subs: List[tuple], bound: int, exclude: Optional[List[tuple]] = None) -> Optional[dict]:
         """The best ready, unclaimed row across all subscriptions, or None.
 
         `subs`: list of (collection, state, tier, priority, delay) from
@@ -134,6 +134,12 @@ class PostgresProvider:
         Ready = the per-subscription delay has elapsed. Unclaimed = no LIVE claim
         on the row (anti-join on public.factory_job_claims by the claim_data
         tuple claims.py stamps; expired leases don't hide a row).
+
+        `exclude`: list of (collection, key, state, state_changed_at) tuples the
+        caller has already attempted THIS pass and that didn't leave their state
+        (a clean no-op or a parked row — both no-op in _dispatch). They are
+        skipped so LOWER-priority work behind a stuck/parked head row still runs;
+        without this a parked row at the queue head would block the whole pass.
 
         # GOAL: check + claim in ONE db call. This is the CHECK half only — a
         # read-only peek; the caller then CLAIMS the winner via the proven
@@ -157,6 +163,15 @@ class PostgresProvider:
             params.extend([coll, state, int(tier), int(pri), float(dly)])
         params.append(self._factory_name)
         params.append(int(bound))
+        # Optional NOT-IN over already-attempted rows this pass. The ::timestamptz
+        # cast makes the row-tuple comparison type-check against the timestamptz
+        # column (the placeholder is `unknown` otherwise).
+        exclude_sql = ""
+        if exclude:
+            ex_values = ",".join(["(%s,%s,%s,%s::timestamptz)"] * len(exclude))
+            exclude_sql = f"AND (d.collection, d.key, d.state, d.state_changed_at) NOT IN (VALUES {ex_values})"
+            for ex_coll, ex_key, ex_state, ex_sca in exclude:
+                params.extend([ex_coll, ex_key, ex_state, ex_sca])
         # Casts (::int / ::double precision) are required: an all-placeholder
         # VALUES gives every subs column `unknown` type, so arithmetic and the
         # bound comparison would fail without them.
@@ -180,6 +195,7 @@ class PostgresProvider:
                         AND fjc.claim_data->>'key'          = d.key
                         AND fjc.claim_data->>'source_state' = d.state
                   )
+                  {exclude_sql}
                 ORDER BY s.tier::int, s.priority::int, d.state_changed_at, d.key
                 LIMIT 1
             )

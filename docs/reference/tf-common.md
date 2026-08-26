@@ -95,28 +95,16 @@ No per-row "safety re-fire" for idempotent aggregators — use `tf.on_schedule` 
 | `.do(handler)` | Register the handler. Required. |
 | `.delay(seconds=N, minutes=N, hours=N)` | Defer dispatch until `state_changed_at + delta <= NOW()`. Strict cancellation — if the row leaves the watched state before the delay elapses, the handler is skipped. Re-arm — on transition out + back in, `state_changed_at` bumps and the delay restarts. Time units are additive within a single call: `.delay(seconds=30, minutes=2)` → 2m30s. |
 | `.claim_duration(seconds=N, minutes=N, hours=N)` | How long this subscription's claim on a row stays valid if the worker dies mid-handler (default 1 hour). If the claim expires, another worker can pick the row up. Time units are additive within a single call. |
-| `.priority(n)` | Order this handler against OTHER state handlers that have rows ready in the same poll — `nice` semantics: **LOWER `n` runs sooner**, default `0`. Negative jumps ahead of the default pack (`.priority(-1)`), positive drops behind it (`.priority(5)` for background sweeps). Does NOT reorder rows *within* a handler (still oldest-first) nor scheduled jobs (those always run before state — see below). |
+| `.priority(n)` | Order this handler against OTHER state handlers AND due scheduled jobs competing in the same poll — `nice` semantics: **LOWER `n` runs sooner**, default `0`. Negative jumps ahead of the default pack (`.priority(-1)`), positive drops behind it (`.priority(5)` for background sweeps). Scheduled jobs carry the same `.priority()` and compete in the same order; MCP requests (`_mcp_*`) are a higher tier and always run first. Does NOT reorder rows *within* a handler (still oldest-first). See *Pickup order* below. |
 
-**The poll scan.** Dispatch is a plain FIFO scan of the state — no cursor, no re-fire tracking in SQL (the strike map handles that in memory):
+**Ordering within a state.** Rows in a `(collection, state)` are served oldest-first (FIFO) — the ordering key is `state_changed_at ASC, key ASC`, no cursor, no re-fire tracking in SQL (the strike map handles that in memory). A `.delay(...)` handler adds a floor `state_changed_at + delay <= NOW()`; the row is eligible only once the delay elapses (strict cancellation/re-arm per the table row above). Granularity = your `run_pending()` cadence.
 
-```sql
--- live (non-delayed) handler
-SELECT factory_name, collection, key, user_id, value, state, created_at, updated_at
-  FROM factory_data
- WHERE factory_name = $factory AND collection = $collection AND state = $state
- ORDER BY state_changed_at ASC, key ASC
-```
+**Pickup order — preemptive, priority-tiered.** Dispatch is a fully **preemptive** loop: each pass runs ONE unit of work then rechecks from the top, so a newly-ready higher-priority unit jumps the queue mid-drain (a big low-priority drain no longer starves higher-priority rows that arrive during it). Two tiers, highest first:
 
-The `.delay()` variant (same state-as-queue semantics; cancellation/re-arm per the table row above) adds one predicate:
+1. **MCP requests** (`_mcp_*` collections) — always first, FIFO.
+2. **Scheduled jobs ⨝ state handlers** — unified by `.priority()` (lower `n` runs sooner; equal priority breaks by `state_changed_at`/soonest-run). A due `tf.on_schedule` job competes head-to-head with state rows: the job runs unless a state row with a *strictly lower* priority number is ready, in which case that row runs first. Scheduled jobs no longer "run as a block before state".
 
-```sql
--- delayed handler — same scan plus the delay floor
-   AND state_changed_at + ($delay_seconds * INTERVAL '1 second') <= NOW()
-```
-
-Granularity = your `run_pending()` cadence. Live and delayed handlers for the same `(collection, state)` interleave by natural `state_changed_at` order in one inline pass.
-
-**Pickup order + the scheduled-job interleave.** Each poll pass: due `tf.on_schedule` jobs run first as a block, then state handlers are served in `.priority()` order (lower `n` first; equal priority keeps registration order; rows within a handler stay oldest-first). The scheduler is **re-run between every state row** — so a due scheduled job fires *during* a long state drain, not after it. Without this, draining a large backlog through a per-row handler would starve a scheduled job for the whole drain. Dispatch stays **cooperative on one thread**: `.priority()` decides which handler *starts* next; a handler that itself blocks (e.g. a long per-row LLM call) still holds the thread until it returns — priority never preempts a running handler. Keep long per-row handlers short or chunked.
+Dispatch stays **cooperative on one thread**: `.priority()` decides which unit *starts* next; a handler that itself blocks (e.g. a long per-row LLM call) still holds the thread until it returns — priority never preempts a *running* handler. Keep long per-row handlers short or chunked. (⚠️ a continuous stream of MCP requests, being tier 0, can starve scheduled + state work — that is the intended precedence.)
 
 **Poll-based dispatch, NOTIFY-gated.** Dispatch is **always** poll-based — NOTIFY (see *NOTIFY channels* below) never delivers or routes work, only wakes the poll. Each `run_pending()` tick drains the NOTIFY buffer and runs a poll pass only when:
 
@@ -191,7 +179,13 @@ tf.on_schedule.every(10).minutes.do(job_function)
 tf.on_schedule.every().hour.do(job_function)
 tf.on_schedule.every().day.at("10:30").do(job_function)
 tf.on_schedule.every().monday.do(job_function)
+
+# .priority(n) orders a scheduled job against state handlers + other due jobs
+# (lower runs sooner, default 0 — same nice semantics as on_state.priority):
+tf.on_schedule.every(5).minutes.priority(-1).do(urgent_recompute)
 ```
+
+A due scheduled job competes with ready state rows by `.priority()`: it runs unless a state row with a strictly lower priority number is ready. It no longer runs unconditionally before state — see *Pickup order* above.
 
 ## Main Loop
 
@@ -202,7 +196,7 @@ while True:
     tf.sleep(1)
 ```
 
-`tf.run_pending()` takes no arguments. Each tick it: flushes any subscriptions registered since the last tick, runs scheduled jobs, drains the NOTIFY buffer, and runs a poll pass **if due** (own-factory NOTIFY drained, OR 10 s elapsed since the last poll, OR first tick) — otherwise it issues zero queries. The first call also bootstraps the lifecycle (opens the connection, `LISTEN tf_data_changed`, installs SIGTERM/SIGINT handlers, publishes the MCP catalog, forces a first poll).
+`tf.run_pending()` takes no arguments. Each tick it: flushes any subscriptions registered since the last tick, drains the NOTIFY buffer, and runs ONE unified preemptive dispatch pass (MCP requests → scheduled jobs ⨝ state by `.priority()`; see *Pickup order* above). The DB side of that pass runs **only if due** (own-factory NOTIFY drained, OR 10 s elapsed since the last poll, OR first tick) — otherwise the pass touches no DB and just drains due scheduled jobs (zero queries when idle). The first call also bootstraps the lifecycle (opens the connection, `LISTEN tf_data_changed`, installs SIGTERM/SIGINT handlers, publishes the MCP catalog, forces a first poll).
 
 `tf.sleep(N)` is the documented sleep primitive — externally a blocking N-second sleep, internally polling a shutdown flag at 1 s granularity so SIGTERM/SIGINT preempts it. NOTIFYs that arrive while sleeping buffer on the connection and are observed on the next tick. Your `tf.sleep(N)` cadence is the floor on dispatch latency.
 

@@ -436,7 +436,7 @@ def _get_next_scheduled_job():
 
 
 def run_pending():
-    """Drain scheduled jobs, drain NOTIFY, poll if due.
+    """Drain NOTIFY, then run one unified preemptive pass (scheduled ⨝ state).
 
     Factories call this in a loop:
         while True:
@@ -448,9 +448,10 @@ def run_pending():
     arrives the flag is observed at the end of this function and at the
     next `tf.sleep` slice, raising SystemExit(0) for clean teardown.
 
-    A poll runs only when an own-factory NOTIFY was drained, OR
-    _SAFETY_POLL_INTERVAL_SEC has elapsed, OR it is the first tick.
-    Otherwise this issues zero queries.
+    Every tick runs one dispatch pass; the DB side of it (the peek finder) runs
+    only when an own-factory NOTIFY was drained, OR _SAFETY_POLL_INTERVAL_SEC has
+    elapsed, OR it is the first tick — otherwise the pass touches no DB and only
+    drains due scheduled jobs (zero queries when idle).
     """
     global _last_poll_ts
 
@@ -698,11 +699,18 @@ def _poll_pass(do_db_poll: bool = True):
         return
     provider = _get_provider() if do_db_poll else None
 
-    # (key, state, state_changed_at_iso) attempted THIS pass. A no-op row (handler
-    # ran but didn't transition) would otherwise be re-peeked forever within one
-    # pass and blow past its strike budget in a single tick; treating an
-    # already-seen row as "DB empty" preserves one-attempt-per-pass semantics.
+    # A row attempted THIS pass that DIDN'T leave its state (clean no-op, or
+    # already PARKED — _dispatch no-ops both) is still the DB's best candidate,
+    # so a naive re-peek returns it forever. `seen` (its strike key) detects the
+    # second offer; `exclude` (its identity tuple) then removes it from further
+    # peeks so LOWER-priority work behind it still runs this pass — critically,
+    # a parked row at the queue head must NOT block everything behind it. Each
+    # stuck row is offered at most twice (dispatch once, then excluded), so the
+    # exclude list holds only genuinely-stuck rows and the pass still terminates
+    # (peek eventually returns None). One-attempt-per-pass strike semantics are
+    # preserved: a no-op row is dispatched exactly once per pass.
     seen: set = set()
+    exclude: list = []  # (collection, key, state, state_changed_at) to skip in peek
     units = 0
     while units < _MAX_UNITS_PER_PASS:
         sch = _get_next_scheduled_job()
@@ -710,26 +718,26 @@ def _poll_pass(do_db_poll: bool = True):
 
         row = None
         if do_db_poll and _handlers:
-            row = provider.peek_next(_subscription_rows(), bound)
+            row = provider.peek_next(_subscription_rows(), bound, exclude)
 
         if row is not None:
             rk = _strike_key(row)
             if rk in seen:
-                # The top-priority ready row is one we already attempted this
-                # pass (it didn't transition). Give a due scheduled job its turn,
-                # then end the pass — a fresh pass next poll retries with reset
-                # per-pass semantics. (A stuck high-priority no-op row can shade
-                # lower-priority work for up to _MAX_ATTEMPTS passes until it
-                # parks — bounded and self-healing.)
-                if sch is not None:
-                    sch[1]()
-                return
+                # Already attempted this pass and still here → exclude it (using
+                # the row's OWN state_changed_at datetime, which round-trips PG
+                # equality exactly) and re-peek. Do NOT re-dispatch it.
+                exclude.append((row["collection"], row["key"], row["state"], row["state_changed_at"]))
+                continue
             due = _due_entries(_handlers.get((row["collection"], row["state"]), []), row)
             if due:
                 seen.add(rk)
                 _dispatch(due, row)
                 units += 1
                 continue
+            # No entry's delay has elapsed (shouldn't happen — the finder bounds
+            # on min-delay). Exclude to avoid a spin, then re-peek.
+            exclude.append((row["collection"], row["key"], row["state"], row["state_changed_at"]))
+            continue
 
         # No state row won this round → run the best scheduled job, else done.
         if sch is not None:

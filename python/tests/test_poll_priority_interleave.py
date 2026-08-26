@@ -7,8 +7,8 @@ disappears), claims + stepped-debug are monkeypatched out, and scheduled jobs
 are supplied via a stub, so no DB is needed. Covers:
   - scheduled ⨝ state competition by `.priority()` via the scheduled-priority
     BOUND: a state row runs before a scheduled job only when it beats it;
-  - the per-pass `seen` guard stops a no-op row (handler didn't transition it)
-    from being re-served forever inside one pass;
+  - the per-pass seen/exclude guard serves a no-op row once and does NOT let a
+    stuck/parked head row block lower-priority work behind it;
   - `_subscription_rows` tiering (MCP `_mcp_*` = tier 0) + min priority/delay;
   - `_get_next_scheduled_job` picks lowest priority then soonest;
   - `_due_entries` honours each entry's own delay;
@@ -36,8 +36,14 @@ class _FakeProvider:
     def __init__(self, rows):
         self.rows = list(rows)
 
-    def peek_next(self, subs, bound):
-        elig = [r for r in self.rows if r["_tier"] == 0 or r["_priority"] < bound]
+    def peek_next(self, subs, bound, exclude=None):
+        ex = set((c, k, s, sca) for (c, k, s, sca) in (exclude or []))
+        elig = [
+            r
+            for r in self.rows
+            if (r["_tier"] == 0 or r["_priority"] < bound)
+            and (r["collection"], r["key"], r["state"], r["state_changed_at"]) not in ex
+        ]
         if not elig:
             return None
         elig.sort(key=lambda r: (r["_tier"], r["_priority"], r["state_changed_at"], r["key"]))
@@ -186,6 +192,47 @@ def test_two_distinct_rows_both_served(monkeypatch):
     monkeypatch.setattr(base, "_get_next_scheduled_job", lambda: None)
     base._poll_pass(do_db_poll=True)
     assert sorted(seen_keys) == ["a", "b"]
+
+
+def test_parked_head_row_does_not_block_rows_behind_it(monkeypatch):
+    """A PARKED row is the best candidate (peek keeps returning it) but _dispatch
+    no-ops it. It must be EXCLUDED so a lower-priority ready row behind it still
+    runs this pass — else the queue head deadlocks until restart."""
+    _reset_all()
+    _patch_common(monkeypatch)
+    served = []
+    _register("c", "s", lambda it: (served.append(it["key"]), prov.remove(it)), priority=0)
+    parked = _item("c", "s", "parked", priority=-9)  # sorts to the head
+    ready = _item("c", "s", "ready", priority=0)
+    prov = _FakeProvider([parked, ready])
+    # Pre-park the head row: _dispatch will early-return without running/removing it.
+    base._strikes[base._strike_key(parked)] = base._PARKED
+    monkeypatch.setattr(base, "_get_provider", lambda: prov)
+    monkeypatch.setattr(base, "_get_next_scheduled_job", lambda: None)
+    base._poll_pass(do_db_poll=True)
+    assert served == ["ready"]  # parked never runs; the row behind it does
+
+
+def test_noop_head_row_does_not_block_lower_priority(monkeypatch):
+    """A no-op row (handler ran, row didn't move) at higher priority must be
+    served once AND not block a lower-priority ready row in the same pass."""
+    _reset_all()
+    _patch_common(monkeypatch)
+    order = []
+
+    def handler(it):
+        order.append(it["key"])
+        if it["key"] == "ready":  # only the ready row transitions
+            prov.remove(it)
+
+    _register("c", "s", handler, priority=0)
+    noop = _item("c", "s", "noop", priority=-5)  # higher priority, never removed
+    ready = _item("c", "s", "ready", priority=0)
+    prov = _FakeProvider([noop, ready])
+    monkeypatch.setattr(base, "_get_provider", lambda: prov)
+    monkeypatch.setattr(base, "_get_next_scheduled_job", lambda: None)
+    base._poll_pass(do_db_poll=True)
+    assert order == ["noop", "ready"]  # no-op served once, ready not starved
 
 
 # ---------------------------------------------------------------------------
