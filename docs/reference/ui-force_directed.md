@@ -106,6 +106,7 @@ One flat block, resolved once per graph change against the edge's projection. Ev
 | `arrow` | `true` | draw a target-end arrowhead |
 | `offset_start` | `0` | px inset at the source perimeter (moot when `start_anchor: center`) |
 | `offset_end` | `0` | px inset at the target perimeter (moot when `end_anchor: center`) |
+| `secondary_line` | — | optional second stroke on the SAME geometry (see below) |
 
 **`center` vs `perimeter`:** `center` docks the line at the node's centre point (arrowhead-less waypoints like state pills read best this way); `perimeter` docks at the node boundary. When `bundle_links` is on, a `perimeter` end auto-uses the node's flow **port** (its in/out hemisphere) instead of the plain radius point.
 
@@ -120,6 +121,23 @@ edge_style:
 ```
 
 The arrowhead marker itself is drawn in a single global colour, so it does not follow a per-edge `edge_style.color`; the line body does.
+
+**Secondary line (`edge_style.secondary_line`)** — a second `<path>` drawn along the SAME edge geometry as the base thread, with its own stroke props. Turns two-path effects into config rather than bespoke code:
+
+| key | meaning |
+|---|---|
+| `color` | stroke colour (omit to inherit the base thread colour) |
+| `width` | stroke width |
+| `dasharray` | SVG `stroke-dasharray` (e.g. `"0.1 11"` → dots at pitch 11) |
+| `linecap` | `round` makes dashes into beads/dots |
+| `dashoffset` | phase offset (for alternating patterns) |
+
+```yaml
+edge_style:
+  secondary_line: { width: 4, dasharray: "0.1 11", linecap: round }   # string-of-pearls on the base thread
+```
+
+Recipes: **pearls** `{ width: 4, dasharray: "0.1 11", linecap: round }` · **ladder / knockout** `{ color: <canvas bg>, width: 3, dasharray: "0.1 8", linecap: round }` · **alternating shade** base `dasharray: "9 9"` + `secondary_line: { dasharray: "9 9", dashoffset: 9, color: <2nd> }`. The base thread carries the arrow; the secondary line never does. Cross-agent tool-wiring edges (`uses_tools_from_agent`, drawn by the factory-edit graph) get a built-in grey pearls secondary line automatically — no config needed.
 
 ### Styling expressions
 
