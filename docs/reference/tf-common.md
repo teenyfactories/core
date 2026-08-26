@@ -140,7 +140,7 @@ Every `on_state` handler receives the same row dict:
 
 There is **one** wake channel for agent dispatch: `tf_data_changed`. The `factory_data` NOTIFY trigger emits it on every write, with a JSON payload that includes `factory_name`. tf core issues a single global `LISTEN tf_data_changed` and treats any own-factory fire purely as an **advisory "poll now" wake** — it never delivers or routes work, and the only payload field core consults is `factory_name` (collection/state for the actual work come from the poll query, not the payload).
 
-No per-state channel, no client-side hashing (as above) — concretely, plaintext `{factory}.{collection}.{state}` channels and `tf_state_<md5(...)>` channels are not emitted and not subscribed.
+No per-state channel that tf core subscribes to. Plaintext `{factory}.{collection}.{state}` channels are not emitted at all. The hashed `tf_collection_<md5>` / `tf_state_<md5(...)>` channels ARE still emitted by the `factory_data` trigger, but tf core does not subscribe to them — dispatch is poll-based off the single `tf_data_changed` wake, so those hashed emissions are legacy (safe to drop once confirmed no consumer remains).
 
 | Channel | Length | Fires when | Consumer |
 |---|---|---|---|
@@ -262,7 +262,7 @@ No booleans. If the write fails, it raises.
 
 Same rule as in *Pub/Sub Model* above (raised or silently-non-transitioning are counted identically as one strike; 5 strikes parks the row; restart or a genuine rewrite resets the count) — this is the error-handling consequence of that FIFO-queue contract, not a separate mechanism.
 
-**Slow-failing handlers block the queue.** A single inline FIFO pass dispatches the state in order, so a handler that hangs (or fails slowly) on the row at the head delays every fresher row behind it — for up to 5 ticks before that head row parks. Handlers that do network/file I/O **must set their own timeouts**; core does not impose one (see *Shutdown semantics* above — `tf.sleep`'s polling doesn't interrupt blocking work inside a handler).
+**Slow/hung handlers stall EVERYTHING.** Dispatch is cooperative on one thread: priority picks the next unit but never preempts a handler already running (see *Pickup order* above). So a handler that hangs — or does slow blocking network/file I/O — holds the thread and stalls ALL other work (other state rows, MCP requests, scheduled jobs) until it returns; `tf.sleep`'s shutdown-polling does NOT interrupt blocking work inside a handler. Handlers that do I/O **must set their own timeouts** — core imposes none. (Separately: a handler that keeps returning *without transitioning* its row re-fires and parks after 5 attempts — that's the strike system, not blocking.)
 
 ### 5. Handlers should log and re-raise on unexpected errors
 
@@ -306,7 +306,7 @@ tf.log_persona("First-person message for UI speech bubbles")
 tf.breakpoint("about to do the risky thing")   # halt this agent until the operator clicks Continue
 ```
 
-`tf.breakpoint(message)` is a single-call halt — **a cheap no-op when the factory's debug mode is off**, safe to leave in production code. When on, it writes a `level='breakpoint'` row to `factory_logs` and blocks this agent until the operator clicks **Continue** in the logs panel (or disables debug mode, which auto-releases every halted breakpoint).
+`tf.breakpoint(message)` is a single-call halt — **a cheap no-op when the factory's debug mode is off**, safe to leave in production code. When on, it writes a `level='breakpoint'` row to `factory_logs` and blocks this agent until the operator clicks **Continue** in the logs panel, disables debug mode (which auto-releases every halted breakpoint), or sends SIGTERM/SIGINT (which releases the halt within ~1 s of the next poll).
 
 Per-factory debug mode is toggled from the UI (factory header → **Debug**). There are two scopes:
 
@@ -323,7 +323,7 @@ def handle(item):
     order_id = item['key']
     tf.log_info(f"validating {order_id}")
     tf.breakpoint(f"about to charge card for {order_id}")  # halts here when scope is 'all' or 'explicit'
-    charge_card(item['value'])
+    charge_card(item['data'])
 ```
 
 Don't include secrets in the message — it's written to `factory_logs` and visible to anyone with logs-read access.
