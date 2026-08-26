@@ -81,6 +81,9 @@ meta = {
 - `meta["stop_reason"]` — `'completed'` | `'max_turns'` | `'length'` | `'repeat_error'` | `'error'`
 - `meta["error"]` — exception msg if `stop_reason == 'error'`, else None
 - `meta["usage"]` — folded across all turns (summed tokens, turn count)
+- `meta["max_turns_reached"]` — bool; True if the loop stopped by hitting `max_turns`
+
+In loop meta, `latency_ms` is None and `raw` is `{}` (both are single-shot fields, not populated per-loop); `finish_reason` and `cost` carry the last turn's values.
 
 ### Per-call model override
 
