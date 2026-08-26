@@ -262,7 +262,7 @@ No booleans. If the write fails, it raises.
 
 Same rule as in *Pub/Sub Model* above (raised or silently-non-transitioning are counted identically as one strike; 5 strikes parks the row; restart or a genuine rewrite resets the count) — this is the error-handling consequence of that FIFO-queue contract, not a separate mechanism.
 
-**Slow-failing handlers block the queue.** A single inline FIFO pass dispatches the state in order, so a handler that hangs (or fails slowly) on the row at the head delays every fresher row behind it — for up to 5 ticks before that head row parks. Handlers that do network/file I/O **must set their own timeouts**; core does not impose one (see *Shutdown semantics* above — `tf.sleep`'s polling doesn't interrupt blocking work inside a handler).
+**Slow/hung handlers stall EVERYTHING.** Dispatch is cooperative on one thread: priority picks the next unit but never preempts a handler already running (see *Pickup order* above). So a handler that hangs — or does slow blocking network/file I/O — holds the thread and stalls ALL other work (other state rows, MCP requests, scheduled jobs) until it returns; `tf.sleep`'s shutdown-polling does NOT interrupt blocking work inside a handler. Handlers that do I/O **must set their own timeouts** — core imposes none. (Separately: a handler that keeps returning *without transitioning* its row re-fires and parks after 5 attempts — that's the strike system, not blocking.)
 
 ### 5. Handlers should log and re-raise on unexpected errors
 
