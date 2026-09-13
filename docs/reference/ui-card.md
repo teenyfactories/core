@@ -30,7 +30,7 @@ children:
 
 Top-level (not under `config:`):
 
-- **title**: header text.
+- **title**: header text. Accepts a literal string or a `$:` expression resolved against the card's data.
 - **header_buttons**: array of component configs rendered right-aligned on the title's own baseline.
 
 ## `header_buttons:` — controls level with the title
