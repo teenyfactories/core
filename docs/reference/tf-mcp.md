@@ -159,8 +159,8 @@ tf.add_mcp_tool('recompute_index', 'Rebuild the vector index') \
   complement of the audience; absent ⇒ visible everywhere). `external`/`foreman` are enforced
   orchestrator-side (dropped from that surface's `tools/list` AND `tools/call`); `agent_loop`
   is enforced core-side in `_gather_tools`.
-- This is **author-side** scoping, distinct from a credential's caller-side `tool_selection`
-  allow-list.
+- This is **author-side** scoping, distinct from a credential's caller-side User tool
+  grants in `mcp_grants`.
 
 ## How tool calls flow
 
