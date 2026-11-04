@@ -164,6 +164,7 @@ agents:
     base_image: ghcr.io/...          # optional per-agent image override (see fallback chain above)
     environment:                     # optional per-agent env-var map passed to the container
       SOME_FLAG: "1"
+    tags: [simulation]               # optional tooling metadata; no runtime effect by itself
     volumes:                         # optional per-agent volume attachments; see Volumes below
       - name: agreements
         mode: read
@@ -183,6 +184,7 @@ agents:
 | `environment` | object | Per-agent environment variables passed into the container. |
 | `volumes` | list | Per-agent volume attachments (see Volumes › Attachments). |
 | `stage` | string | Optional free-text editor-graph lane tag (see Stage lanes). The editor discovers lanes from the distinct tag values. Presentational only; no runtime effect. Omit to leave the agent un-laned. |
+| `tags` | list of strings | Tooling metadata with no runtime effect by itself. Template agents tagged `simulation` may be omitted, with their script files, when the user declines simulated AI content. |
 | `uses_tools_from_agent` | list of agent slugs | Other agents whose MCP tools this agent binds over the wire (`tf.llm().add_tools_from_agent('<slug>')`). Lists **agent slugs, not tool names**. Drawn in the editor graph as a **parallel double line** from this agent to each named one — distinct from the single state-flow edges and the dashed manual-transition edges. Documentation + graph only; no runtime effect (the actual binding is whatever the `.py` calls). A slug with no matching agent is skipped by the graph, not errored. |
 
 `input_states` / `output_states` are **wiring metadata** — they document the
