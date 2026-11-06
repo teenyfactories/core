@@ -40,6 +40,33 @@ default_ui:
 - **NEVER wrap the layout in a `layout_column` just to sit a modal beside a table/card** — modals aren't in-flow, so that wrapper wraps a single child: a `redundant-singleton` (see `ui-common` § `redundant-singleton`) that `edit_ui` REFUSES. `default_ui.modals` removes any need for such a wrapper, and keeps a root `tabs` as the single root node.
 - A modal opened from several places (several tabs, a row + a button) is declared **once** in `default_ui.modals` and opened by id from each.
 
+## Instance isolation and nesting
+
+The `id` identifies a **definition**, not one open dialog. Each open creates a new instance, including recursive opens of the same definition.
+
+| Interface | Behaviour |
+|---|---|
+| Input | `open.subject` is a JSON object; row/point/node clicks supply their selected record. Omitted input is `{}`. |
+| Local draft | Title, body, footer and actions read the instance's private `data.*`. Input and caller context are deep-copied at open. |
+| Caller context | Existing page-level fields remain available as a snapshot, not live shared references. Opening a modal does not publish its subject onto the page. |
+| Save | Existing `save_data_item` and explicit `data`/`data_field` parameters apply. No automatic write-back to the caller. |
+| Close | `close` without an id closes its originating instance. `then_close` closes that instance only after a successful save. Closing a parent also closes its descendants. |
+| Explicit close id | Closes the nearest matching ancestor instance; otherwise the most recent open instance of that definition. |
+| Interaction | Only the top instance receives keyboard shortcuts and focus. Closing it restores the underlying dialog; page scrolling resumes after the last dialog closes. |
+
+The input interface uses the existing `subject` object. Per-definition typed input schemas and result callbacks are not available. Isolation applies to id-opened reusable definitions; directly rendered, id-less modal components retain their existing host-owned lifecycle.
+
+Do not use an opened modal to mutate page data implicitly. Persist through an action or pass the next modal's input explicitly:
+
+```yaml
+on_click:
+  action: open
+  id: edit_record
+  subject:
+    _key: '$: data._key'
+    title: '$: data.title'
+```
+
 ## YAML shape
 
 Two forms supported. **Named-key form (current default):**
