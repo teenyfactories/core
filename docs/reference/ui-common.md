@@ -395,10 +395,10 @@ The DataRef root is both the form-binding namespace (`field: notes`) and the `$:
 
 Every leaf that fires a handler names the thing that was clicked, but each used to name it after **itself**: a table published `row`, a `scatter` `point`, a `force_directed` `node`, a card/button nothing at all (the DataRef snapshot was passed bare). So `$: row.title` was correct on a table row click and silently `undefined` on a kanban card — a frequent source of confusion in this surface.
 
-`data` is now published alongside whatever the leaf calls it, in both places a subject appears:
+`data` exposes the clicked subject in both places:
 
 - **In the handler's own params** — `on_item_click: { action: open, subject: { t: '$: data.title' } }`. Bare field names (`$: title`) also resolve here.
-- **In the opened modal's body** — `title: '$: data.title'`, `field: data.role`.
+- **In an opened modal instance** — `title: '$: data.title'`, `field: data.role`. Id-opened modals own a deep-copied input/draft scope; they do not publish it onto the page. Nested and recursive instances cannot overwrite their caller's data. See [ui-modal](ui-modal.md#instance-isolation-and-nesting).
 
 ```yaml
 # identical body whether a table row, a kanban card, or the chat opened it
@@ -410,9 +410,9 @@ Every leaf that fires a handler names the thing that was clicked, but each used 
       config: { field: data.role, label: Role }
 ```
 
-The leaf-specific names still resolve on their own leaf and are **deprecated** — `check_ui` warns on `row.` / `point.` / `node.` in an event handler or a `field:` / `data_field:` binding. `subject` is not deprecated: it is not leaf-specific, and an `action: open` publishes under both.
+The leaf-specific names still resolve on their own leaf and are **deprecated** — `check_ui` warns on `row.` / `point.` / `node.` in an event handler or a `field:` / `data_field:` binding. `subject` is not deprecated: modal instances expose their input under both `data` and `subject`.
 
-`data` holds the **most recent** subject. Opening a second modal over the first repoints it, and closing the inner one drops it rather than restoring the outer — stacked subjects must be read by their own key.
+Each id-opened modal owns its `data` draft. Opening or closing a child leaves the parent's draft unchanged. Non-modal hosts that publish onto a shared DataRef still replace its most recent subject.
 
 **Not covered:** inside an `editable_grid`, a `config:` expression such as `cells.key` resolves `row` and `column` against the grid's own **axes**, not a subject. That `row.` is permanent and correctly unflagged.
 
@@ -511,7 +511,7 @@ Two traps: (1) **Only string leaves evaluate** — `resolveValue` evaluates only
 
 ### `$:` evaluation is render-time only (Model A doctrine)
 
-One evaluator, `ComponentRenderer`, at render time, against the current DataRef — parents never pre-evaluate a child's YAML. If a click-handler needs the clicked subject visible to children, the parent publishes the subject into the DataRef instead. Every publish lands under **`data`** plus the leaf's own historical key (`node` for a `force_directed` node click, `point` for a `scatter` point click, `row` for a `table` row click / `row_actions`, `subject` for an `open` with a non-table `subject:`). Children in the opened subtree read `$: data.<field>` whichever leaf opened them; the leaf-specific spellings still work and are deprecated. The merge is shallow over the existing DataRef root — siblings keep seeing form state. The **`open` action** publishes its `subject:` param the same way before activating the modal, so a Button-open or a chat-opened modal body reads `$: data.<field>` (or `$: subject.<field>`) identically.
+One evaluator, `ComponentRenderer`, at render time, against the current DataRef — parents never pre-evaluate a child's YAML. Id-opened modals receive a deep copy of the caller's context and a private input/draft under **`data`** and `subject`. Table, scatter and force-directed opens also retain their deprecated `row`, `point` or `node` alias inside that instance. Children read `$: data.<field>` whichever leaf opened them. Button and chat opens use the same private scope; no modal subject is published onto page siblings. Non-modal hosts retain shared DataRef publication.
 
 **Which leaves can read a published subject (no `data:` block)** — only DataRef-aware leaves: `detail_list` ✅ (the canonical label→value record for a subject; no-`data:` mode reads each `fields[].field` from DataRef — use instead of stacked read-only `text_input`s), `text_input`/`textarea` ✅ (reads `field` from DataRef, `read_only: true` for display cells, `format:` still runs), `markdown` ✅ (no-`data:` mode reads `field` from DataRef, renders its own empty state when blank), `tag_list` ✅ (reads `field` from DataRef, a string-array field renders one chip per item, `empty_text` for zero). `metrics` ❌ — reads only via its own `data:` block (`useBoundData`), no DataRef fallback, renders `<EmptyState>` against a published subject; use `detail_list` instead.
 
@@ -548,8 +548,8 @@ Buttons, table `row_actions`, force-graph node clicks, whole-card clicks (`card.
 |---|---|---|---|
 | `save_data_item` | PUT `/api/factories/{factory}/data/{collection}/{key}` with `{ data?, state? }`; `data` **shallow-merges** into `value` (see Write semantics). Form saves, state transitions, and triggering agents (write to the agent's input collection/state, `key: $uuid` per click). | `collection`, `key` | `state`, `data`, `data_field` |
 | `delete_data_item` | DELETE `/api/factories/{factory}/data/{collection}/{key}`; cascades to `factory_vectors`. | `collection`, `key` | — |
-| `close` | Deactivate the host with `id:`, or top of the activation stack when omitted. Symmetric with `open`. | — | `id` |
-| `open` | Activate a registered sibling id. Same as `on_<event>.open: <id>` short-form. | `id` | `subject` (onto DataRef root) |
+| `close` | Close the originating modal instance, or the active non-modal host. Explicit `id:` selects a definition; see [ui-modal](ui-modal.md#instance-isolation-and-nesting). | — | `id` |
+| `open` | Open a registered definition or host. Same as `on_<event>.open: <id>` short-form. | `id` | `subject` (private modal input) |
 | `set_url_param` | Client-side nav: write a URL query param, no backend contact. Sibling `key_from_url` reader re-renders. | `param`, `value` | `history` (`push` default \| `replace`) |
 | `custom:<name>` | Bubbles through `onAction` to the host page, which interprets it (`custom:start_factory`, `custom:save_and_restart`). | varies | varies |
 
@@ -596,14 +596,14 @@ Canonical UI-triggered-agent pattern: each click writes a fresh row in the agent
 
 ### `then_close: true` — close-after-action (universal)
 
-Add `then_close: true` to any `on_click` action for a follow-up `close` via the activation stack (no explicit modal id needed). Timing: `save_data_item`/`delete_data_item` fire the close AFTER the HTTP request resolves successfully; `custom:<name>` fires it OPTIMISTICALLY (immediately after dispatch) — if the custom op fails, the modal still closes.
+Add `then_close: true` to any `on_click` action for a follow-up `close` of its originating modal instance or active host (no explicit modal id needed). Timing: `save_data_item`/`delete_data_item` fire the close AFTER the HTTP request resolves successfully. A custom handler that returns a promise must resolve truthy to close; a handler without a return value closes optimistically.
 
 ```yaml
 - { component: button, on_click: { action: save_data_item, collection: rubric, key: default, then_close: true } }
 - { component: button, on_click: { action: custom:save_and_restart, then_close: true } }   # optimistic close
 ```
 
-`action: close` (symmetric with `open`) takes optional `id:` — omitted closes the top of the activation stack: `on_click: { action: close, id: edit_modal }` or bare `on_click: { action: close }`.
+`action: close` takes optional `id:`: `on_click: { action: close, id: edit_modal }` or bare `on_click: { action: close }`. Without an id, it closes the originating modal instance or active non-modal host. An explicit modal definition id closes the nearest matching ancestor, or its latest instance when no ancestor matches. Closing a parent also closes its descendants.
 
 ### `action: set_url_param` — URL-driven view navigation
 
