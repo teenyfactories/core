@@ -55,32 +55,20 @@ class PostgresLogHandler(logging.Handler):
         try:
             # Lazy import — db must never log through this handler (recursion);
             # we only ride its shared connection.
-            from .. import db
+            from ..datastore import get_datastore
 
             level = self._level_name(record)
             message = self.format(record) if self.formatter else record.getMessage()
 
-            with db.cursor() as cursor:
-                cursor.execute(
-                    """INSERT INTO factory_logs (factory_name, service_name, container_id, level, message)
-                       VALUES (%s, %s, %s, %s, %s)""",
-                    (self._factory_name, self._service_name, self._container_id, level, message)
-                )
+            get_datastore().append_log(self._service_name, self._container_id, level, message)
             # Realtime broadcast is the trigger's job (notify_factory_logs ON
             # factory_logs AFTER INSERT, channel tf_logs_changed). The
             # previous direct NOTIFY "factory_logs" here was dead code — no
             # listener was ever attached to that channel. Removed 2026-05-22
             # alongside the orchestrator-side equivalent.
 
-        except Exception as e:
-            # Never let logging errors crash the agent. Invalidate the shared
-            # connection on connection-class errors so the next write (from
-            # any component) reconnects instead of failing forever.
-            try:
-                from .. import db
-                db.invalidate_if_dead(e)
-            except Exception:
-                pass
+        except Exception:
+            pass  # Logging must never crash the agent; the datastore owns connection recovery.
 
 
 def log_debug(message: str):
@@ -118,25 +106,16 @@ def log_persona(message: str):
     try:
         for handler in logger.handlers:
             if isinstance(handler, PostgresLogHandler):
-                from .. import config as _config, db
-                factory = _config.FACTORY_NAME
+                from .. import config as _config
+                from ..datastore import get_datastore
                 # See PostgresLogHandler.__init__ — slug is canonical,
                 # AGENT_NAME is the dev-run fallback.
                 service = _config.AGENT_SLUG or _config.AGENT_NAME
                 container = _config.AGENT_ID or None
 
-                with db.cursor() as cursor:
-                    cursor.execute(
-                        """INSERT INTO factory_logs (factory_name, service_name, container_id, level, message)
-                           VALUES (%s, %s, %s, %s, %s)""",
-                        (factory, service, container, 'persona', message)
-                    )
+                get_datastore().append_log(service, container, 'persona', message)
                 # Trigger handles realtime; see PostgresLogHandler.emit
                 # above for the dead-NOTIFY history.
                 break
-    except Exception as e:
-        try:
-            from .. import db
-            db.invalidate_if_dead(e)
-        except Exception:
-            pass
+    except Exception:
+        pass

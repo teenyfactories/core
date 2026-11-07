@@ -178,9 +178,8 @@ def _get_provider():
     """
     global _provider_instance
     if _provider_instance is None:
-        from .providers.postgres import PostgresProvider
-
-        _provider_instance = PostgresProvider()
+        from ..datastore import get_datastore
+        _provider_instance = get_datastore()
     return _provider_instance
 
 
@@ -326,14 +325,6 @@ def _flush_registrations():
     if not _pending_registrations:
         return
 
-    from .providers.postgres import TF_DATA_CHANGED_CHANNEL
-
-    provider = _get_provider()
-    try:
-        provider.listen(TF_DATA_CHANGED_CHANNEL)  # idempotent in the provider
-    except Exception as e:
-        log_error(f"LISTEN {TF_DATA_CHANGED_CHANNEL} failed: {e}")
-
     while _pending_registrations:
         reg = _pending_registrations.pop(0)
         coll = reg["collection"]
@@ -359,6 +350,12 @@ def _flush_registrations():
             }
         )
         log_debug(f"Registered handler for {coll}.{state} (delay_seconds={delay_seconds})")
+
+    from ..notifications import get_notifications
+    try:
+        get_notifications().update_subscriptions(list(_handlers))
+    except Exception as exc:
+        log_error(f"Wake subscription failed (polling continues): {exc}")
 
 
 # =============================================================================
@@ -748,22 +745,6 @@ def _poll_pass(do_db_poll: bool = True):
 
 
 def _drain_notifications() -> bool:
-    """Drain the psycopg2 NOTIFY buffer every tick (so it can't grow).
-
-    Returns True iff ≥1 drained NOTIFY was for THIS factory. The payload is
-    consulted for `factory_name` ONLY — collection/state come from the DB
-    query in `_poll_pass`, never from the payload. (The trigger payload key
-    for state is `state_after`, not `state`; do not reintroduce any
-    `payload['state']` read here.) Cross-factory NOTIFYs on the shared
-    `tf_data_changed` channel are drained but do not trigger a poll.
-    """
-    provider = _get_provider()
-    notifications = provider.poll_notifications()
-    if not notifications:
-        return False
-    hit = False
-    for note in notifications:
-        payload = note.get("payload") or {}
-        if isinstance(payload, dict) and payload.get("factory_name") == FACTORY_NAME:
-            hit = True
-    return hit
+    """Consume a coalesced own-factory wake; durable rows supply all work details."""
+    from ..notifications import get_notifications
+    return get_notifications().consume_wake()

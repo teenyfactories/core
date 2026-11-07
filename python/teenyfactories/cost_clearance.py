@@ -24,28 +24,25 @@ the architect's report):
     scope      — optional label of the breached limit (agent / factory /
                  tenant / default), surfaced in the pause warning.
 
-Failure-mode policy (fail-OPEN — never block real work on an orchestrator
-hiccup; same posture as the old DB poll-gate):
+Failure-mode policy (network outages fail open; explicit auth rejection blocks):
     200 + {cleared:true}    → proceed, cache the verdict for _CACHE_TTL_SEC
     200 + {cleared:false}   → pause via tf.sleep until resets_at, re-check
     404 / 503               → feature off ⇒ proceed (latch 503 for the process)
+    401 / 403               → raise AgentAuthenticationError; block this attempted call
     5xx / network / timeout → log_warn ONCE per reason, proceed (fail-open)
     malformed JSON          → proceed (fail-open)
-    never raise
 
 Cache: a ``cleared`` verdict is trusted for _CACHE_TTL_SEC so we don't round-
 trip per call on the hot path. A ``not cleared`` verdict is never cached — we
 loop on fresh reads until clear.
 """
 
-import os
 import time
 
 import requests
 
 from .logging import log_debug, log_warn
 
-_DEFAULT_BASE_URL = "http://orchestrator:8998"
 _TIMEOUT_SECONDS = 2.0
 
 # An "all clear" verdict stays trusted this long before we re-query. Mirrors the
@@ -69,12 +66,6 @@ _last_clear_ts: float = 0.0
 
 # Dedupe transport-failure warns so a flapping orchestrator doesn't flood logs.
 _warned: set = set()
-
-
-def _base_url() -> str:
-    # Reuses the same override knob as secrets.py — one internal base URL for
-    # every agent→orchestrator :8998 call.
-    return os.getenv("TF_SECRETS_URL", _DEFAULT_BASE_URL).rstrip("/")
 
 
 def _warn_once(reason: str) -> None:
@@ -110,9 +101,12 @@ def _fetch_clearance():
     """
     global _feature_disabled
 
-    url = f"{_base_url()}/llm-clearance"
+    from .config import INTERNAL_SERVICE_URL
+    from .internal_client import headers, check_auth
+
+    url = f"{INTERNAL_SERVICE_URL}/llm-clearance"
     try:
-        resp = requests.get(url, timeout=_TIMEOUT_SECONDS)
+        resp = requests.get(url, headers=headers(), timeout=_TIMEOUT_SECONDS)
     except requests.exceptions.Timeout:
         _warn_once("timeout")
         return None
@@ -120,6 +114,7 @@ def _fetch_clearance():
         _warn_once(f"network:{type(e).__name__}")
         return None
 
+    check_auth(resp)
     if resp.status_code == 200:
         try:
             payload = resp.json()

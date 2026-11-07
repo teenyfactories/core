@@ -33,7 +33,7 @@ AUTOCOMMIT, so sharing cannot disrupt pub/sub (LISTEN/NOTIFY) state.
 import json
 from typing import Optional
 
-from . import config, db
+from . import config
 from .logging import log_warn
 
 _VALID_KINDS = ("llm", "embedding")
@@ -90,13 +90,8 @@ def log_usage(
     raw_json = json.dumps(raw_payload, default=str) if raw_payload else None
 
     try:
-        with db.cursor() as cursor:
-            cursor.execute(
-                """SELECT public.record_ai_usage(
-                    %s, %s, %s, %s, %s,
-                    %s, %s::jsonb, %s, %s, %s
-                )""",
-                (
+        from .datastore import get_datastore
+        return get_datastore().record_usage((
                     fname,  # p_factory_name
                     sname,  # p_service_name
                     user_id,  # p_user_id (NULL ok)
@@ -107,13 +102,7 @@ def log_usage(
                     request_id,  # p_request_id
                     chat_id,  # p_chat_id
                     None if latency_ms is None else int(latency_ms),  # p_latency_ms
-                ),
-            )
-            row = cursor.fetchone()
-            return row[0] if row else None
+                ))
     except Exception as e:
-        # Connection-class errors invalidate the shared connection (next
-        # caller reconnects); SQL errors leave it alone.
-        db.invalidate_if_dead(e)
         log_warn(f"[usage_recorder] write failed: {e}")
         return None
