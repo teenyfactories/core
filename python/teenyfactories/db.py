@@ -1,43 +1,36 @@
 """Shared per-process PostgreSQL connection. INTERNAL ONLY — not exported.
 
-Every tf-core component (message queue provider, collection reads/writes,
-claims, log handler, usage recorder, breakpoints) shares ONE psycopg2
-connection per agent process, minted here. Before 2026-06-10 each component
-opened its own (3 persistent + breakpoint churn), so total DB connections
-scaled ~3-5x agent count.
+The PostgreSQL datastore shares one psycopg2 client connection per agent.
+PgBouncer can multiplex its short transactions onto a bounded server pool.
 
 Contract:
-  • get_connection() — lazy connect via config.connect_postgres() (AUTOCOMMIT
-    + RLS `SET app.factory_name`). Reconnects automatically if the connection
-    was invalidated or closed; the SET re-applies because reconnect routes
-    through the same helper.
-  • cursor() — fresh cursor per operation. Components must NOT hold
-    long-lived cursors; per-call cursors make reconnect state-free.
-  • generation() — bumped on every successful (re)connect. The message-queue
-    provider compares it to know when LISTEN must be re-issued.
-  • invalidate_if_dead(exc) — call from except blocks around DB operations.
-    Only connection-class errors (OperationalError / InterfaceError) close +
-    clear the connection. SQL errors (constraint violations etc.) must NOT
-    invalidate — with one shared connection they would kill the LISTEN
-    session for the whole agent.
+  • transaction() serializes BEGIN, transaction-local factory scope, operation
+    and COMMIT. Failure rolls back; a failed rollback discards the connection.
+  • session() serializes direct PostgreSQL notification access. Pooled agents
+    use the independent SSE provider, which never touches this connection.
+  • get_connection() reconnects lazily; generation() tracks each new session
+    so direct notifications can restore LISTEN after reconnect.
+  • invalidate_if_dead(exc) discards connection-class failures. SQL errors
+    leave a successfully rolled-back session available for reuse.
 
-Threading: agents are single-threaded (handlers, schedules, and MCP dispatch
-all run inline in run_pending) so there is deliberately no lock. If factory
-authors spawn their own threads, psycopg2's threadsafety level 2 allows
-sharing the *connection* across threads as long as cursors aren't shared —
-which the fresh-cursor-per-operation discipline already guarantees.
+The reentrant lock covers whole operations, not individual statements. Nested
+transactions are rejected. Handlers, embeddings, HTTP calls and breakpoint waits
+run outside transactions; holding one would pin a pooler backend.
 
 Logging: this module must never log through the tf logger. The Postgres log
 handler writes through this module; a connect failure that logged through it
 would recurse. Failures simply raise to the caller.
 """
 
+from contextlib import contextmanager
+from threading import RLock
 from typing import Optional
 
 from . import config
 
 _conn = None
 _generation = 0
+_lock = RLock()
 
 
 def get_connection():
@@ -49,9 +42,37 @@ def get_connection():
     return _conn
 
 
-def cursor():
-    """Fresh cursor on the shared connection. One per operation."""
-    return get_connection().cursor()
+@contextmanager
+def session():
+    """Exclusive direct-session access for PostgreSQL notification reception."""
+    with _lock:
+        yield get_connection()
+
+
+@contextmanager
+def transaction():
+    """A complete short, factory-scoped transaction; no logging/network waits inside."""
+    import psycopg2.extensions
+
+    with _lock:
+        conn = get_connection()
+        if conn.get_transaction_status() != psycopg2.extensions.TRANSACTION_STATUS_IDLE:
+            raise RuntimeError("Nested datastore transactions are not supported")
+        cur = conn.cursor()
+        try:
+            cur.execute("BEGIN")
+            cur.execute("SELECT set_config('app.factory_name', %s, true)", (config.FACTORY_NAME,))
+            yield cur
+            cur.execute("COMMIT")
+        except BaseException as exc:
+            try:
+                cur.execute("ROLLBACK")
+            except Exception:
+                conn.close()
+            invalidate_if_dead(exc)
+            raise
+        finally:
+            cur.close()
 
 
 def generation() -> int:

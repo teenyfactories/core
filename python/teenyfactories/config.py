@@ -231,6 +231,11 @@ POSTGRES_USER = _env_only("POSTGRES_FACTORY_USER") or _env_only("POSTGRES_USER")
 # No default — orchestrator always injects this. Agents started outside
 # the orchestrator must set it explicitly.
 POSTGRES_PASSWORD = _env_only("POSTGRES_FACTORY_PASSWORD") or _env_only("POSTGRES_PASSWORD")
+FACTORY_DATA_BACKEND = _env_only("FACTORY_DATA_BACKEND") or "postgres"
+FACTORY_NOTIFICATION_BACKEND = _env_only("FACTORY_NOTIFICATION_BACKEND") or "postgres"
+AUTH_AGENT_TOKEN = _env_only("AUTH_AGENT_TOKEN") or ""
+INTERNAL_SERVICE_URL = (_env_only("TF_SECRETS_URL") or "http://orchestrator:8998").rstrip("/")
+POSTGRES_SSL = (_env_only("POSTGRES_SSL") or "").lower()
 if POSTGRES_PASSWORD is None and _env_only("POSTGRES_HOST"):
     raise RuntimeError(
         "Required environment variable POSTGRES_FACTORY_PASSWORD (or legacy "
@@ -245,29 +250,14 @@ if POSTGRES_PASSWORD is None and _env_only("POSTGRES_HOST"):
 # This helper is called ONLY by `teenyfactories.db` — the process-wide
 # shared-connection module. Every tf-core component (message queue,
 # collections, claims, logging, usage recorder, breakpoints) rides that one
-# connection via `db.get_connection()` / `db.cursor()`; nothing else may
-# call this helper directly. It sets `app.factory_name` to FACTORY_NAME on
-# the session so the RLS policies on factory_* tables (init_orchestrator.sql,
-# #159) auto-fence reads/writes to this factory's rows only.
-#
-# Fails closed: if FACTORY_NAME is unset OR equal to the dev "unknown"
-# sentinel, the SET is issued honestly (with that value) — the RLS policy
-# then admits no rows (NULL = factory_name is NULL). One-time warn log so
-# dev runs outside the orchestrator surface the cause quickly.
-#
-# Connection lifecycle: agents open ONE long-lived connection per process;
-# no pool, no checkout/release. The SESSION-scoped SET survives until the
-# connection drops; `db.get_connection()` reconnects through this helper,
-# which re-SETs.
+# connection through `db.transaction()`. That context sets transaction-local
+# factory scope before each operation; connect-time session scope is unsafe
+# with transaction pooling. Direct notifications alone use `db.session()`.
 _warned_unknown_factory = False
 
 
 def connect_postgres():
-    """Open a psycopg2 connection scoped to this factory via RLS.
-
-    AUTOCOMMIT mode + `SET app.factory_name = FACTORY_NAME` issued once
-    on connect. Caller owns the connection lifecycle.
-    """
+    """Open an AUTOCOMMIT client; db.transaction owns transaction-local RLS scope."""
     global _warned_unknown_factory
     import psycopg2
     import psycopg2.extensions
@@ -285,10 +275,10 @@ def connect_postgres():
         user=POSTGRES_USER,
         password=POSTGRES_PASSWORD,
         application_name=app_name,
+        connect_timeout=5,
+        sslmode={"true": "require", "false": "disable", "verify-full": "verify-full"}.get(POSTGRES_SSL, "prefer"),
     )
     conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
-    with conn.cursor() as cur:
-        cur.execute("SET app.factory_name = %s", (FACTORY_NAME,))
     if FACTORY_NAME == "unknown" and not _warned_unknown_factory:
         logging.getLogger("teenyfactories").warning(
             "RLS scope is 'unknown' — set FACTORY_NAME to your factory's name "

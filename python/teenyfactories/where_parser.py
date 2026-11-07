@@ -1,16 +1,13 @@
 """
-`.where()` string-DSL parser → parameterized SQL predicate.
+`.where()` string-DSL parser → validated backend-neutral predicate tree.
 
 This module is the SECURITY BOUNDARY for the collection query builder. A
 factory author (or YAML / chat / MCP) supplies a small filter string like:
 
     "token_count >= 400 and document != 'X.pdf' and meta.state == 'vectorised'"
 
-and `compile_where()` returns `(sql_fragment, params)` where `sql_fragment`
-uses `%s` placeholders and `params` is the matching value list. The caller
-(query.py) splices the fragment INSIDE a code-built tenant scope prefix
-(`factory_name = %s AND collection = %s AND ( <fragment> )`) so the predicate
-can never widen scope.
+and `parse_where()` returns an AST. The selected datastore compiles it within
+its own fixed factory/collection scope, so a filter can never widen scope.
 
 Safety is structural, not a blocklist:
   * Parse → AST → parameterized SQL. Every literal becomes a `%s` param; values
@@ -42,7 +39,7 @@ Grammar:
 
 import re
 
-__all__ = ["compile_where", "QueryFilterError"]
+__all__ = ["parse_where", "QueryFilterError"]
 
 
 class QueryFilterError(ValueError):
@@ -63,10 +60,6 @@ _MAX_PARAMS = 1000  # total bound params incl. list elements (<< PG 65535)
 _META_COLS = frozenset({"state", "key", "user_id", "created_at", "updated_at", "state_changed_at"})
 
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-# SQL literal (fixed, safe) guarding a JSONB numeric cast so a malformed row is
-# EXCLUDED rather than aborting the whole query.
-_NUM_GUARD = r"^-?[0-9]+(\.[0-9]+)?$"
-_BOOL_VALS = "('true','false')"
 
 _CMP_OPS = {"==", "!=", "<", ">", "<=", ">="}
 _KEYWORDS = {"and", "or", "not", "in", "true", "false"}
@@ -289,101 +282,31 @@ class _Parser:
         raise QueryFilterError(f"expected a literal (pos {p})")
 
 
-# ── Compiler: AST → (sql, params) ────────────────────────────────────────────
-
-
-def _field_sql(field):
-    kind, name = field
-    if kind == "col":
-        return "d.%s" % name  # name is from the whitelist → safe
-    # payload name was validated by the tokenizer's identifier regex
-    return "d.value->>'%s'" % name
-
-
-def _is_numeric(py):
-    return isinstance(py, (int, float)) and not isinstance(py, bool)
-
-
-def _compile(node, params, depth):
-    if depth > _MAX_DEPTH:
-        raise QueryFilterError("filter nesting too deep")
-    tag = node[0]
-    if tag in ("and", "or"):
-        left = _compile(node[1], params, depth + 1)
-        right = _compile(node[2], params, depth + 1)
-        return "(%s %s %s)" % (left, tag.upper(), right)
-    if tag == "not":
-        return "(NOT %s)" % _compile(node[1], params, depth + 1)
-    # comparison
-    _, field, op, value = node
-    return _compile_cmp(field, op, value, params)
-
-
-def _add_param(params, val):
-    params.append(val)
-    if len(params) > _MAX_PARAMS:
-        raise QueryFilterError("filter has too many values")
-
-
-def _compile_cmp(field, op, value, params):
-    is_col = field[0] == "col"
-    fsql = _field_sql(field)
-
-    if op in ("in", "not in"):
-        items = value[1]
-        if not items:
-            raise QueryFilterError("empty list not allowed")
-        # The list binds as ONE param (psycopg2 adapts it for ANY/ALL); the cap
-        # counts its elements so a giant list can't blow the param ceiling.
-        if len(params) + len(items) > _MAX_PARAMS:
-            raise QueryFilterError("filter has too many values")
-        anyall = "= ANY(%s)" if op == "in" else "<> ALL(%s)"
-        numeric = all(_is_numeric(x) for x in items)
-        if is_col:
-            params.append(items)
-            return "%s %s" % (fsql, anyall)
-        if numeric:
-            guard = "%s ~ '%s'" % (fsql, _NUM_GUARD)
-            params.append([float(x) for x in items])
-            return "(%s AND (%s)::numeric %s)" % (guard, fsql, anyall)
-        params.append([str(x) for x in items])
-        return "%s %s" % (fsql, anyall)
-
-    # scalar comparison
-    py = value[1]
-    ordering = op in ("<", ">", "<=", ">=")
-    sql_op = {"==": "=", "!=": "IS DISTINCT FROM"}.get(op, op)
-
-    if is_col:
-        _add_param(params, py)
-        return "%s %s %%s" % (fsql, sql_op)
-
-    # payload — cast by literal type / operator
-    if ordering or _is_numeric(py):
-        guard = "%s ~ '%s'" % (fsql, _NUM_GUARD)
-        _add_param(params, float(py) if not _is_numeric(py) else py)
-        return "(%s AND (%s)::numeric %s %%s)" % (guard, fsql, sql_op)
-    if isinstance(py, bool):
-        guard = "%s IN %s" % (fsql, _BOOL_VALS)
-        _add_param(params, py)
-        return "(%s AND (%s)::boolean %s %%s)" % (guard, fsql, sql_op)
-    # string
-    _add_param(params, py)
-    return "%s %s %%s" % (fsql, sql_op)
-
-
-def compile_where(text):
-    """Compile a `.where()` filter string to `(sql_fragment, params)`.
-
-    `sql_fragment` uses `%s` placeholders and is safe to splice inside the
-    caller's parenthesized predicate slot. Raises QueryFilterError on any
-    malformed / disallowed input.
-    """
+def parse_where(text):
+    """Validate the DSL and return a backend-neutral predicate tree."""
     if not isinstance(text, str):
         raise QueryFilterError("filter must be a string")
     if len(text) > _MAX_LEN:
         raise QueryFilterError("filter string too long")
-    ast = _Parser(_tokenize(text)).parse()
-    params = []
-    sql = _compile(ast, params, 0)
-    return sql, params
+    node = _Parser(_tokenize(text)).parse()
+    count = 0
+
+    def validate(item, depth=0):
+        nonlocal count
+        if depth > _MAX_DEPTH:
+            raise QueryFilterError("filter nesting too deep")
+        if item[0] in ('and', 'or'):
+            validate(item[1], depth + 1)
+            validate(item[2], depth + 1)
+        elif item[0] == 'not':
+            validate(item[1], depth + 1)
+        else:
+            _, field, op, value = item
+            size = len(value[1]) if op in ('in', 'not in') else 1
+            if count + size > _MAX_PARAMS:
+                raise QueryFilterError("filter has too many values")
+            if field[0] != 'col' and op in ('<', '>', '<=', '>='):
+                float(value[1])  # Preserve the existing ordering-literal validation timing.
+            count += 1
+    validate(node)
+    return node

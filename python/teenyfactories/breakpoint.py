@@ -37,11 +37,10 @@ INSERT can carry `RETURNING id` — the agent needs the bigserial id back to
 poll its own row. Tagged so future audits don't flag it as paradigm bypass.
 """
 
-import json
 import time
 from typing import Optional
 
-from . import config, db, lifecycle
+from . import config, lifecycle
 
 # ── Mode cache ─────────────────────────────────────────────────────────────
 # 1s TTL keeps per-tick cost flat (one cached read per dispatch) while
@@ -99,7 +98,7 @@ def _log_breakpoint(message: str, *, kind: str, **context) -> Optional[int]:
     `context` carries auto-halt locator fields (coll, state, row_key).
     """
     try:
-        conn = db.get_connection()
+        from .datastore import get_datastore
         # Context first so the canonical halt fields (state/kind/agent_name/
         # container_id/hit_at) ALWAYS win — _auto_halt passes the dispatch
         # state under the key `state`, which would otherwise clobber the
@@ -114,27 +113,9 @@ def _log_breakpoint(message: str, *, kind: str, **context) -> Optional[int]:
                 "hit_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             }
         }
-        with conn.cursor() as cur:
-            cur.execute(
-                """INSERT INTO factory_logs
-                       (factory_name, service_name, container_id,
-                        user_id, level, message, log_data)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb)
-                   RETURNING id""",
-                (
-                    config.FACTORY_NAME,
-                    config.AGENT_SLUG or config.AGENT_NAME or None,
-                    config.AGENT_ID or None,
-                    "system",
-                    "breakpoint",
-                    message,
-                    json.dumps(log_data),
-                ),
-            )
-            row = cur.fetchone()
-            return row[0] if row else None
+        return get_datastore().append_log(config.AGENT_SLUG or config.AGENT_NAME or None,
+                                          config.AGENT_ID or None, 'breakpoint', message, log_data)
     except Exception as e:
-        db.invalidate_if_dead(e)
         return None
 
 
@@ -154,20 +135,14 @@ def _wait_for_release(log_id: int) -> None:
         if lifecycle.shutting_down():
             return
         try:
-            conn = db.get_connection()
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT log_data FROM factory_logs WHERE id = %s",
-                    (log_id,),
-                )
-                row = cur.fetchone()
+            from .datastore import get_datastore
+            log_data = get_datastore().read_log(log_id)
         except Exception as e:
-            db.invalidate_if_dead(e)
             return  # fail-open: DB blip during halt shouldn't wedge the agent
 
-        if row is None:
+        if log_data is None:
             return  # row deleted out from under us; treat as released
-        log_data = row[0] or {}
+        log_data = log_data or {}
         debug = log_data.get("_debug") or {}
         if debug.get("state") == "continued":
             return
