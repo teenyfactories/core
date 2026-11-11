@@ -5,11 +5,9 @@ Calls the orchestrator's internal-only secrets endpoint at
 `http://orchestrator:8998/secrets/<KEY>`. The endpoint is reachable only
 from inside the private agent network — the orchestrator never publishes
 8998 to the host, regardless of which deployment backend (compose,
-kubernetes, ...) is provisioning the network. Trust is anchored on
-private-network membership; the orchestrator resolves the caller's scope
-from the source IP. We send X-Factory-Name + X-Agent-Name as
-defence-in-depth so the orchestrator can sanity-check that the headers
-agree with the network-derived scope.
+kubernetes, ...) is provisioning the network. Managed agents authenticate
+X-Factory-Name and stable X-Agent-Slug using X-Agent-Token. Standalone
+single-factory mode trusts its private network and pins the factory scope.
 
 Read-only. No `.set` / `.rotate` from agent code — admin UI handles writes.
 
@@ -34,10 +32,8 @@ from urllib.parse import quote
 
 import requests
 
-from .config import FACTORY_NAME, AGENT_NAME
 from .logging import log_debug, log_warn, log_error
 
-_DEFAULT_BASE_URL = 'http://orchestrator:8998'
 _TIMEOUT_SECONDS = 2.0
 
 # Process-lifetime latch: once the orchestrator says 503 (feature off),
@@ -50,7 +46,8 @@ _warned = set()
 
 
 def _base_url() -> str:
-    return os.getenv('TF_SECRETS_URL', _DEFAULT_BASE_URL).rstrip('/')
+    from .config import INTERNAL_SERVICE_URL
+    return INTERNAL_SERVICE_URL
 
 
 def secrets(key_name: str, default=None):
@@ -68,10 +65,8 @@ def secrets(key_name: str, default=None):
         return os.getenv(key_name) or default
 
     url = f'{_base_url()}/secrets/{quote(key_name, safe="")}'
-    headers = {
-        'X-Factory-Name': FACTORY_NAME or '',
-        'X-Agent-Name':   AGENT_NAME or '',
-    }
+    from .internal_client import headers as agent_headers
+    headers = agent_headers()
 
     try:
         resp = requests.get(url, headers=headers, timeout=_TIMEOUT_SECONDS)
@@ -93,16 +88,14 @@ def secrets(key_name: str, default=None):
             return value
         return os.getenv(key_name) or default
 
-    # 403 = orchestrator refused (no X-Factory-Name header / NetworkPolicy
-    # gate / etc). 404 = scope resolved but no secret stored. Both fall back
+    # 403 = orchestrator refused access. 404 = no secret stored. Both fall back
     # to env-or-default from the caller's POV, but 403 is operationally
     # significant — it means the agent failed to authenticate to the secrets
     # endpoint and is now running blind. Log at ERROR so operators see it.
     if resp.status_code == 403:
         log_error(
             f"tf.secrets({key_name!r}): orchestrator rejected (403). "
-            f"Falling back to env var / default. Check NetworkPolicy + "
-            f"X-Factory-Name header wiring."
+            f"Falling back to env var / default. Check internal agent credentials and scope."
         )
         return os.getenv(key_name) or default
     if resp.status_code == 404:

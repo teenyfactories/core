@@ -24,7 +24,23 @@ There is no `tf.secrets.set` / `.rotate` / `.list`. Writes happen via the admin 
 
 `tf.call_llm` resolves provider credentials via `tf.secrets()` automatically — no agent code change needed when you migrate keys from `.env` into the secrets store. Same name, same fallback chain.
 
-The orchestrator's internal HTTP listener is reachable only from inside the private agent network (port 8998 is never published to host); trust is anchored on private-network membership and the orchestrator resolves the caller's scope from the source IP. Agents send `X-Factory-Name` + `X-Agent-Name` headers as defence-in-depth. The mechanism that supplies the private network is backend-specific (compose user-defined bridge today; cluster-internal service when running under Kubernetes) — the contract from an agent's point of view is unchanged.
+The internal HTTP listener stays on the private agent network; never publish port 8998. Docker/Kubernetes-managed agents send a runtime-injected `AUTH_AGENT_TOKEN` in `X-Agent-Token`, alongside `X-Factory-Name` and stable `X-Agent-Slug`. The orchestrator validates the credential before using that identity for secrets, volumes, clearance or wakes. It derives each logical agent's token inside the existing secrets provider; agents never receive the master key. Internal MCP additionally requires its separate `Authorization: Bearer <user PAT>` and user permissions.
+
+**Standalone exception:** `ORCHESTRATOR_MODE=none` with configured `FACTORY_NAME` trusts its private network without agent tokens. The server pins scope to that factory and rejects a different claimed factory. Agent-slug headers are unverified in this mode; any network peer can impersonate an agent. Volume attachments and MCP's user PAT still apply. A supplied invalid token is rejected rather than bypassed.
+
+## Datastore and advisory wakes
+
+Factory APIs stay unchanged. Bootstrap settings are infrastructure configuration, not managed-secret cascade values:
+
+| Setting | Default | Contract |
+|---|---|---|
+| `FACTORY_DATA_BACKEND` | `postgres` | Durable rows, queries, vectors, claims, logs, usage and breakpoints use the selected semantic datastore |
+| `FACTORY_NOTIFICATION_BACKEND` | `postgres` | Direct PostgreSQL notifications, or `orchestrator` for background SSE wakes |
+| `TF_SECRETS_URL` | `http://orchestrator:8998` | Existing internal address, shared by secrets/config, clearance and orchestrator wakes |
+
+Transaction-pooled deployments must select `orchestrator` notifications. SQL still travels directly through PgBouncer to PostgreSQL; the orchestrator does not proxy SQL. Every PostgreSQL datastore operation sets factory scope inside a short transaction. Handlers, embeddings, network calls and breakpoint waits run outside those transactions.
+
+Wakes are coalesced, advisory factory signals, not work payloads or an activation registry. Connection/reconnection triggers catch-up; normal safety polling remains authoritative during wake denial or outage. No direct LISTEN fallback is opened in orchestrator-wake mode. Remote files and managed-only secrets still need their services. Explicit clearance `401/403` blocks the attempted LLM call; network failures retain the existing fail-open clearance policy.
 
 ## Configuration (from environment variables)
 

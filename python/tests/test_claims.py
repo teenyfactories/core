@@ -13,7 +13,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from teenyfactories import claims
+from teenyfactories import claims, db
 
 
 # ── Pure-function tests (no DB) ─────────────────────────────────────────────
@@ -109,8 +109,8 @@ def _seed_source_row(coll: str, key: str, state: str):
     exact (collection, key, state, state_changed_at) tuple — so DB tests
     must seed a real row before attempting to claim.
     """
-    cursor = claims._claim_cursor()
-    cursor.execute(
+    with db.transaction() as cursor:
+        cursor.execute(
         """
         INSERT INTO public.factory_data (factory_name, collection, key, state, value)
         VALUES (%s, %s, %s, %s, '{}'::jsonb)
@@ -120,15 +120,15 @@ def _seed_source_row(coll: str, key: str, state: str):
         """,
         (claims.config.FACTORY_NAME, coll, key, state),
     )
-    return cursor.fetchone()[0]
+        return cursor.fetchone()[0]
 
 
 def _cleanup_source_row(coll: str, key: str):
-    cursor = claims._claim_cursor()
-    cursor.execute(
-        "DELETE FROM public.factory_data WHERE factory_name=%s AND collection=%s AND key=%s",
-        (claims.config.FACTORY_NAME, coll, key),
-    )
+    with db.transaction() as cursor:
+        cursor.execute(
+            "DELETE FROM public.factory_data WHERE factory_name=%s AND collection=%s AND key=%s",
+            (claims.config.FACTORY_NAME, coll, key),
+        )
 
 
 @SKIP_NO_DB
@@ -186,12 +186,12 @@ class TestClaimRace:
 
             # Source row state advances: 'pending' → 'done'. Trigger bumps
             # state_changed_at to T2.
-            cursor = claims._claim_cursor()
-            cursor.execute(
-                "UPDATE public.factory_data SET state = 'done' "
-                "WHERE factory_name=%s AND collection=%s AND key=%s",
-                (claims.config.FACTORY_NAME, "test_coll", "k_stale_1"),
-            )
+            with db.transaction() as cursor:
+                cursor.execute(
+                    "UPDATE public.factory_data SET state = 'done' "
+                    "WHERE factory_name=%s AND collection=%s AND key=%s",
+                    (claims.config.FACTORY_NAME, "test_coll", "k_stale_1"),
+                )
 
             # Worker B, still operating on the stale sca_t1 snapshot, tries to
             # re-claim. The CTE's source-row predicate yields 0 rows → INSERT
@@ -205,7 +205,7 @@ class TestClaimRace:
 @SKIP_NO_DB
 class TestJanitorSweep:
     def test_reaps_expired_claims(self):
-        sca = datetime.now(timezone.utc)
+        sca = _seed_source_row('test_coll', 'k_janitor_1', 'pending')
         # Claim with tiny TTL so it expires before we sweep
         assert claims.try_claim("test_coll", "k_janitor_1", "pending", sca, 0.001) is True
         time.sleep(0.5)
@@ -216,9 +216,10 @@ class TestJanitorSweep:
         with patch.object(claims, '_worker_id', return_value='post-reap'):
             assert claims.try_claim("test_coll", "k_janitor_1", "pending", sca, 60) is True
             claims.release_claim("test_coll", "k_janitor_1", "pending", sca)
+        _cleanup_source_row('test_coll', 'k_janitor_1')
 
     def test_does_not_reap_active_claims(self):
-        sca = datetime.now(timezone.utc)
+        sca = _seed_source_row('test_coll', 'k_active_1', 'pending')
         assert claims.try_claim("test_coll", "k_active_1", "pending", sca, 3600) is True
         claims._last_janitor_tick = 0.0
         claims.janitor_sweep_if_due()
@@ -226,14 +227,14 @@ class TestJanitorSweep:
         with patch.object(claims, '_worker_id', return_value='other'):
             assert claims.try_claim("test_coll", "k_active_1", "pending", sca, 60) is False
         claims.release_claim("test_coll", "k_active_1", "pending", sca)
+        _cleanup_source_row('test_coll', 'k_active_1')
 
     def test_interval_gate(self):
         """janitor_sweep_if_due should be a no-op when called too soon."""
         claims._last_janitor_tick = time.monotonic()  # just ran
         # Calling again immediately should not hit the DB. Mock the cursor
         # method to confirm no execute calls.
-        with patch.object(claims, '_claim_cursor') as mock_get_cursor:
-            mock_get_cursor.return_value = MagicMock()
+        with patch.object(claims, 'get_datastore') as mock_get_cursor:
             claims.janitor_sweep_if_due()
             # Cursor was NOT fetched — interval gate held
             mock_get_cursor.assert_not_called()

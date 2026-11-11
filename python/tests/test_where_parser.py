@@ -7,7 +7,8 @@ cast rules, structural rejection of dangerous input, and the DoS caps.
 
 import pytest
 
-from teenyfactories.where_parser import compile_where, QueryFilterError
+from teenyfactories.where_parser import QueryFilterError
+from teenyfactories.datastore.postgres_filters import compile_where
 
 
 def _norm(sql):

@@ -70,9 +70,8 @@ from urllib.parse import quote
 
 import requests
 
-from .config import FACTORY_NAME, AGENT_SLUG
+from .config import FACTORY_NAME
 
-_DEFAULT_BASE_URL = 'http://orchestrator:8998'
 # Generous vs the 2s secrets timeout — file payloads (PDFs) take longer than a
 # key lookup. Still bounded so a wedged orchestrator surfaces as an error.
 _TIMEOUT_SECONDS = 30.0
@@ -107,7 +106,8 @@ class BucketConflictError(BucketStoreError):
 def _base_url() -> str:
     # Shares the single internal base-URL override knob with secrets.py /
     # cost_clearance.py — one address for every agent→orchestrator :8998 call.
-    return os.getenv('TF_SECRETS_URL', _DEFAULT_BASE_URL).rstrip('/')
+    from .config import INTERNAL_SERVICE_URL
+    return INTERNAL_SERVICE_URL
 
 
 def _backend_kind() -> str:
@@ -277,10 +277,8 @@ class _RemoteBucket:
         # Factory is network-derived (peer-IP) and authoritative; the slug is
         # defence-in-depth so the orchestrator can evaluate the per-agent
         # attachment. AGENT_SLUG (factory.yml key) — NOT the display name.
-        return {
-            'X-Factory-Name': FACTORY_NAME or '',
-            'X-Agent-Slug': AGENT_SLUG or '',
-        }
+        from .internal_client import headers
+        return headers()
 
     def _op_url(self, op: str) -> str:
         # NOTE: path segment is /volumes/ (plural) to match secretsServer.js.
