@@ -143,31 +143,37 @@ Declare the record view as a SIBLING `modal` with an `id:`; the table's `on_item
       body:
         - component: tabs
           children:
-            - { component: tab, slot: tab, title: Overview, config: { icon: id-card } }
-            - component: detail_list
-              slot: panel
-              config:
-                fields:
-                  - { field: data.name, label: Name }
-                  - { field: data.industry, label: Industry }
-                  - { field: data.owner, label: Account owner }
-            - { component: tab, slot: tab, title: Edit, config: { icon: pen } }
-            - component: layout_column
-              slot: panel
+            - component: tab
+              title: Overview
+              config: { icon: id-card }
               children:
-                - component: text_input
-                  config: { field: name, label: Name }
-                - component: select
+                - component: detail_list
                   config:
-                    field: status
-                    label: Status
-                    options: [ { value: active, label: Active }, { value: churned, label: Churned } ]
-            - { component: tab, slot: tab, title: Opportunities, config: { icon: briefcase } }
-            - component: table
-              slot: panel
-              data: { collection: opportunity, state: open }
-              config:
-                columns: [ { field: title, label: Opportunity }, { field: value, label: Value, format: currency } ]
+                    fields:
+                      - { field: data.name, label: Name }
+                      - { field: data.industry, label: Industry }
+                      - { field: data.owner, label: Account owner }
+            - component: tab
+              title: Edit
+              config: { icon: pen }
+              children:
+                - component: layout_column
+                  children:
+                    - component: text_input
+                      config: { field: name, label: Name }
+                    - component: select
+                      config:
+                        field: status
+                        label: Status
+                        options: [ { value: active, label: Active }, { value: churned, label: Churned } ]
+            - component: tab
+              title: Opportunities
+              config: { icon: briefcase }
+              children:
+                - component: table
+                  data: { collection: opportunity, state: open }
+                  config:
+                    columns: [ { field: title, label: Opportunity }, { field: value, label: Value, format: currency } ]
       footer:
         - component: button
           config: { label: Delete, variant: danger, icon: trash }
@@ -177,7 +183,7 @@ Declare the record view as a SIBLING `modal` with an `id:`; the table's `on_item
           on_click: { action: save_data_item, collection: client, key: '$: data._key', then_close: true }
 ```
 
-- **Tabs shape:** `tabs.children` is an alternating sequence of `{ component: tab, slot: tab, title: … }` markers and their panel node (`slot: panel`). One record modal, several perspectives (overview / edit form / related records) — this is the "rich tabbed modal", not multiple flat modals.
+- **Tabs shape:** each `tabs` child is a `tab` node carrying its own content under `children:` (the legacy `slot: tab` + `slot: panel` pairing still renders but is warned as deprecated). One record modal, several perspectives (overview / edit form / related records) — this is the "rich tabbed modal", not multiple flat modals.
 - **Edit:** the Edit tab's inputs bind form fields with `field:`; the footer **Save** (a Button/Modal-footer with `save_data_item` and no explicit `data`) auto-attaches the DataRef snapshot, writing the edited fields back to `key: '$: data._key'` (the clicked row).
 - **Delete:** `delete_data_item` on `key: '$: data._key'` + `then_close: true`.
 

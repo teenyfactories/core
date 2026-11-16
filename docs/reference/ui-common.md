@@ -139,7 +139,7 @@ A **region** (modal body, tab panel, card body) has no fixed axis — it infers 
 
 ### `no-mixed-axis` (hard constraint)
 
-A region must not contain both a `layout_row` and a `layout_column` sibling — there's no single correct axis. At runtime the host (Card/Modal/Tabs) logs `console.error` and renders a red "Layout error" banner, falling back to a vertical stack. At discovery/editor time the backend validator (`schemas/validate.js`) emits a `no-mixed-axis` issue at the offending path. (Doesn't apply to `tabs`' flat children — `slot: tab`/`slot: panel` distribute into separate panel regions.) Fix: nest one inside the other — wrap `layout_row` siblings in an outer `layout_column` (or vice versa):
+A region must not contain both a `layout_row` and a `layout_column` sibling — there's no single correct axis. At runtime the host (Card/Modal/Tabs) logs `console.error` and renders a red "Layout error" banner, falling back to a vertical stack. At discovery/editor time the backend validator (`schemas/validate.js`) emits a `no-mixed-axis` issue at the offending path. (Doesn't apply to `tabs`' flat children — those are `tab` nodes, each its own separate region.) Fix: nest one inside the other — wrap `layout_row` siblings in an outer `layout_column` (or vice versa):
 
 ```yaml
 # WRONG: card children = [layout_row, layout_column]  ✗ mixed siblings
@@ -159,7 +159,7 @@ A region must not contain both a `layout_row` and a `layout_column` sibling — 
 A layout primitive earns its keep by laying **multiple** children out. `check_ui` (`schemas/validate.js`) flags a wrapper that has nothing to lay out:
 
 - a **`layout_column` / `layout_row` with exactly one in-flow child** — it adds no layout but still imposes its own flex defaults on that child (`flex: 1 1 0; align-items: stretch`), so the child stretches to the wrapper instead of sitting naturally in the parent slot. Fix: promote the single child into the wrapper's slot (delete the wrapper). Out-of-flow children — `modal`, `commit_modal`, `confirm_destructive_modal` (React-portaled, not flex siblings) — **don't count**, so `layout_column` children `[tabs, modal]` is still a singleton (one in-flow child). Applies to the **root** too. If the wrapper exists only to co-host a modal beside one real child, move the modal to the top-level **`default_ui.modals`** array (see `ui-modal`) and delete the wrapper.
-- a **`tabs` with exactly one `slot: tab` / `slot: panel` pair** — a one-tab strip has nothing to switch to; render the panel's content directly.
+- a **`tabs` with exactly one tab** — a one-tab strip has nothing to switch to; render that tab's content directly.
 
 **Suppressed** (left alone) when the wrapper carries meaningful differentiating config that positions/sizes the child: `config.justify`, `config.align`, `config.flex`, or a top-level `style:` — e.g. a `layout_column { config: { justify: center } }` that exists purely to centre its child is legitimate. `config.gap` does **not** suppress it (gap only spaces siblings, so it's inert on a lone child).
 
@@ -353,7 +353,9 @@ Object-form values can be literals or `$:` expressions resolved against the PARE
 
 ## Slot rendering
 
-Some parents group children into named slots via the child's top-level `slot:`. `modal` allows `header`/`body`/`footer` (default `body` for children with no `slot:`); `tabs` allows `tab`/`panel` (no default — every child MUST declare `slot:`). A `slot:` value outside the parent's allowlist is rejected; children under a non-slot-aware parent MUST NOT carry `slot:`.
+Some parents group children into named slots via the child's top-level `slot:`. `modal` allows `header`/`body`/`footer` (default `body` for children with no `slot:`). A `slot:` value outside the parent's allowlist is rejected; children under a non-slot-aware parent MUST NOT carry `slot:`.
+
+**`tabs` and `pages` are not slot parents.** They read their own `children`: every child of `tabs` is a `tab` node and every child of `pages` is a `page` node, each carrying its content under its own `children:` ([ui-tabs](ui-tabs.md), [ui-pages](ui-pages.md)). `tabs` still accepts the legacy `slot: tab`/`slot: panel` pairing with a deprecation warning; `pages` rejects it.
 
 **`card` is in the allowlist but ignores it.** The renderer groups a card's children by slot and hands the groups over, but `Card` never reads them — every child renders in the body, in source order, whatever its `slot:`. So `slot: header` / `slot: footer` on a card child is silently inert. Use `header_buttons:` for header controls ([ui-card](ui-card.md)); there is no card footer region. Tracked as `[composable:card-slots-advertised-not-implemented]`.
 
@@ -515,7 +517,7 @@ One evaluator, `ComponentRenderer`, at render time, against the current DataRef 
 
 **Which leaves can read a published subject (no `data:` block)** — only DataRef-aware leaves: `detail_list` ✅ (the canonical label→value record for a subject; no-`data:` mode reads each `fields[].field` from DataRef — use instead of stacked read-only `text_input`s), `text_input`/`textarea` ✅ (reads `field` from DataRef, `read_only: true` for display cells, `format:` still runs), `markdown` ✅ (no-`data:` mode reads `field` from DataRef, renders its own empty state when blank), `tag_list` ✅ (reads `field` from DataRef, a string-array field renders one chip per item, `empty_text` for zero). `metrics` ❌ — reads only via its own `data:` block (`useBoundData`), no DataRef fallback, renders `<EmptyState>` against a published subject; use `detail_list` instead.
 
-A composite "Overview tab" (field record + summary) is built from `detail_list` + `markdown`, not `metrics`. Tab the body with `tabs` (`slot: tab`/`slot: panel` pairs) directly under the modal's `slot: body`.
+A composite "Overview tab" (field record + summary) is built from `detail_list` + `markdown`, not `metrics`. Tab the body with `tabs` (one `tab` node per view, each carrying its own `children:`) directly under the modal's `slot: body`.
 
 ### `open:` accepts a string id only
 
@@ -658,26 +660,27 @@ default_ui:
   layout:
     component: tabs
     children:
-      - { component: tab, slot: tab, title: Rubric }
-      - component: layout_column
-        slot: panel
-        config: { gap: 12px }
+      - component: tab
+        title: Rubric
         children:
-          - component: code_editor
-            config: { field: rubric, language: yaml, serialize: yaml }   # bound to preloaded factory_data.rubric.default
-          - component: button
-            config: { label: Save, variant: primary }
-            on_click:
-              - { action: save_data_item, collection: rubric, key: default }
-              - action: save_data_item                    # trigger the pipeline; agent listens via
-                collection: rubric                         #   tf.on_state('rubric', 'updated')
-                key: $uuid
-                state: updated
+          - component: layout_column
+            config: { gap: 12px }
+            children:
+              - component: code_editor
+                config: { field: rubric, language: yaml, serialize: yaml }   # bound to preloaded factory_data.rubric.default
+              - component: button
+                config: { label: Save, variant: primary }
+                on_click:
+                  - { action: save_data_item, collection: rubric, key: default }
+                  - action: save_data_item                    # trigger the pipeline; agent listens via
+                    collection: rubric                         #   tf.on_state('rubric', 'updated')
+                    key: $uuid
+                    state: updated
 ```
 
 ## Example: 2-tab dashboard
 
-Slot-paired tabs (one `tab` marker + one panel container per tab, in declaration order):
+Nested tabs (one `tab` node per view, its content under that node's own `children:`):
 
 ```yaml
 default_ui:
@@ -685,36 +688,40 @@ default_ui:
     component: tabs
     children:
       # --- Tab 1: Overview ---
-      - { component: tab, slot: tab, title: Overview, config: { icon: chart-pie } }
-      - component: layout_row
-        slot: panel
-        config: { gap: 16px }
+      - component: tab
+        title: Overview
+        config: { icon: chart-pie }
         children:
-          - component: layout_column
-            config: { flex: 2, gap: 16px }         # per-child flex is config, not style
+          - component: layout_row
+            config: { gap: 16px }
             children:
-              - component: metrics
-                data: { collection: stats, state: summary, latest: true }
-                config: { metrics: [ { field: total, label: Total, format: number } ] }
-              - component: card
-                title: Chart
-                config: { flex: 1 }                # fills the remaining column height
+              - component: layout_column
+                config: { flex: 2, gap: 16px }         # per-child flex is config, not style
                 children:
-                  - component: line_chart
+                  - component: metrics
                     data: { collection: stats, state: summary, latest: true }
-                    config: { data_field: daily, x_field: day, y_field: count }
-          - component: card
-            title: Assistant
-            config: { flex: 1 }
-            style: { maxWidth: 360px }              # maxWidth is a real CSS constraint — stays in style
-            children: [ { component: chat_panel } ]
+                    config: { metrics: [ { field: total, label: Total, format: number } ] }
+                  - component: card
+                    title: Chart
+                    config: { flex: 1 }                # fills the remaining column height
+                    children:
+                      - component: line_chart
+                        data: { collection: stats, state: summary, latest: true }
+                        config: { data_field: daily, x_field: day, y_field: count }
+              - component: card
+                title: Assistant
+                config: { flex: 1 }
+                style: { maxWidth: 360px }              # maxWidth is a real CSS constraint — stays in style
+                children: [ { component: chat_panel } ]
 
       # --- Tab 2: Data ---
-      - { component: tab, slot: tab, title: Data, config: { icon: table } }
-      - component: table
-        slot: panel
-        data: { collection: invoices }
-        config:
-          key_field: id
-          columns: [ { field: name, label: Name }, { field: status, label: Status } ]
+      - component: tab
+        title: Data
+        config: { icon: table }
+        children:
+          - component: table
+            data: { collection: invoices }
+            config:
+              key_field: id
+              columns: [ { field: name, label: Name }, { field: status, label: Status } ]
 ```
