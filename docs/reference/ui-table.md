@@ -145,7 +145,6 @@ Declare the record view as a SIBLING `modal` with an `id:`; the table's `on_item
           children:
             - component: tab
               title: Overview
-              config: { icon: id-card }
               children:
                 - component: detail_list
                   config:
@@ -155,7 +154,6 @@ Declare the record view as a SIBLING `modal` with an `id:`; the table's `on_item
                       - { field: data.owner, label: Account owner }
             - component: tab
               title: Edit
-              config: { icon: pen }
               children:
                 - component: layout_column
                   children:
@@ -168,7 +166,6 @@ Declare the record view as a SIBLING `modal` with an `id:`; the table's `on_item
                         options: [ { value: active, label: Active }, { value: churned, label: Churned } ]
             - component: tab
               title: Opportunities
-              config: { icon: briefcase }
               children:
                 - component: table
                   data: { collection: opportunity, state: open }

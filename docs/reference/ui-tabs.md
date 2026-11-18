@@ -29,7 +29,7 @@ children:
 - `default_tab: <int>` — zero-indexed active tab on load (default 0).
 
 ## Data & events
-No data binding. A tab's `children` hold any registered component (`layout_column`, `card`, `markdown`, etc.). Child `config.icon` is ignored (removed by product decision; retained for back-compat).
+No data binding. A tab's `children` hold any registered component (`layout_column`, `card`, `markdown`, etc.). Tab labels are text-only. Existing `config.icon` values on `tab` nodes are accepted but ignored; omit them in new layouts.
 
 ## Example
 ```yaml

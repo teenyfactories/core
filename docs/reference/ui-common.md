@@ -32,7 +32,7 @@ A handful of top-level keys are **leaf-owned**, not universal — they are decla
 
 **No legacy keys.** The strict gate rejects: `type:` (use `component:`), `data_collection:`/`topic_full_data:`/`topic_incremental_data:`/`inline_data:`/`update_topic:` (use `data:`), `config.style:`/`config.data:` (lift to top-level `style:`/`data:`), `Table.filter_by:`/`ForceDirected.node_filter:` (use top-level `filter:`), `chart_type:` (split into `line_chart`/`bar_chart`/`treemap`/`scatter`), `action: publish`/`store`/`apply`/`delete`/`save_and_restart` (see Actions), `{{...}}` templates and bare-jq expressions (use `$:` JSONata).
 
-**Event-handler shape.** Canonical is a top-level `on_<event>:` key with **flat sibling params** on `action:`. A legacy `actions: { on_click: { action, args: {...} } }` shim still normalizes at render time with a `console.warn` — do not author new YAML in that shape. `style:` is a top-level key on every component, consumed as a CSS-style object; nesting it under `config:` is silently ignored.
+**Event-handler shape.** Use a top-level `on_<event>:` key with **flat sibling params** on `action:`. The validator rejects a top-level `actions:` wrapper. An `args:` member inside a handler can pass validation, but it is not flattened into built-in action parameters. Migrate by moving each handler to `on_<event>:` and each argument beside `action:`. `style:` is a top-level key on every component, consumed as a CSS-style object; nesting it under `config:` is silently ignored.
 
 ## Canonical config vocabulary
 
@@ -690,7 +690,6 @@ default_ui:
       # --- Tab 1: Overview ---
       - component: tab
         title: Overview
-        config: { icon: chart-pie }
         children:
           - component: layout_row
             config: { gap: 16px }
@@ -717,7 +716,6 @@ default_ui:
       # --- Tab 2: Data ---
       - component: tab
         title: Data
-        config: { icon: table }
         children:
           - component: table
             data: { collection: invoices }
