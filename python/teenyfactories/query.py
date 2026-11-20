@@ -7,8 +7,9 @@ __all__ = ['CollectionQuery']
 
 
 class CollectionQuery:
-    def __init__(self, name):
+    def __init__(self, name, factory_name=None):
         self._name = name
+        self._factory_name = factory_name
         self._states = None
         self._state_set = False
         self._wheres = []
@@ -18,7 +19,7 @@ class CollectionQuery:
         self._vec_key = None
 
     def _clone(self):
-        q = CollectionQuery(self._name)
+        q = CollectionQuery(self._name, factory_name=self._factory_name)
         q._states = list(self._states) if self._states is not None else None
         q._state_set = self._state_set
         q._wheres = list(self._wheres)
@@ -73,7 +74,8 @@ class CollectionQuery:
 
     def get_all(self):
         try:
-            return get_datastore().query(self)
+            store = get_datastore() if self._factory_name is None else get_datastore(self._factory_name)
+            return store.query(self)
         except Exception as exc:
             log_error(f'collection query failed: {exc}')
             return []
@@ -87,7 +89,8 @@ class CollectionQuery:
 
     def count(self):
         try:
-            return get_datastore().count(self)
+            store = get_datastore() if self._factory_name is None else get_datastore(self._factory_name)
+            return store.count(self)
         except Exception as exc:
             log_error(f'collection count failed: {exc}')
             return 0

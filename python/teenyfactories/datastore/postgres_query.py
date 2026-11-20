@@ -1,7 +1,6 @@
 """Compile a neutral collection-query request into PostgreSQL SQL."""
 import json
 
-from .. import config, db
 from .postgres_filters import compile_filter
 from .postgres_rows import ROW_COLS, dim_column, row_to_dict
 
@@ -20,14 +19,14 @@ def _filters(query, params):
 
 class PostgresQueries:
     def query(self, query):
-        params = [config.FACTORY_NAME, query._name]
+        params = [self.factory_name, query._name]
         if query._vector is None:
             sql = f"SELECT {', '.join(ROW_COLS)} FROM factory_data d WHERE d.factory_name=%s AND d.collection=%s"
             sql += _filters(query, params) + " ORDER BY d.updated_at DESC"
             if query._limit is not None:
                 sql += " LIMIT %s"
                 params.append(query._limit)
-            with db.transaction() as cur:
+            with self.transaction() as cur:
                 cur.execute(sql, params)
                 return [row_to_dict(row) for row in cur.fetchall()]
 
@@ -51,7 +50,7 @@ class PostgresQueries:
         if query._limit is not None:
             sql += " LIMIT %s"
             params.append(query._limit)
-        with db.transaction() as cur:
+        with self.transaction() as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
         result = []
@@ -69,9 +68,9 @@ class PostgresQueries:
         return result
 
     def count(self, query):
-        params = [config.FACTORY_NAME, query._name]
+        params = [self.factory_name, query._name]
         sql = "SELECT COUNT(*) FROM factory_data d WHERE d.factory_name=%s AND d.collection=%s"
         sql += _filters(query, params)
-        with db.transaction() as cur:
+        with self.transaction() as cur:
             cur.execute(sql, params)
             return int(cur.fetchone()[0])

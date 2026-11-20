@@ -69,6 +69,7 @@ from .mcp import add_mcp_server, add_mcp_tool, add_mcp_readme
 
 # Data Collections
 from .collection import collection
+from .factory import factory
 
 # Stepped debugging (no-op when factory debug mode off)
 from .breakpoint import breakpoint
@@ -145,7 +146,7 @@ __all__ = [
     'add_mcp_server', 'add_mcp_tool', 'add_mcp_readme',
 
     # Data Collections
-    'collection',
+    'collection', 'factory',
 
     # Stepped debugging
     'breakpoint',

@@ -50,7 +50,7 @@ def session():
 
 
 @contextmanager
-def transaction():
+def transaction(factory_name=None):
     """A complete short, factory-scoped transaction; no logging/network waits inside."""
     import psycopg2.extensions
 
@@ -61,7 +61,8 @@ def transaction():
         cur = conn.cursor()
         try:
             cur.execute("BEGIN")
-            cur.execute("SELECT set_config('app.factory_name', %s, true)", (config.FACTORY_NAME,))
+            cur.execute("SELECT set_config('app.factory_name', %s, true)",
+                        (config.FACTORY_NAME if factory_name is None else factory_name,))
             yield cur
             cur.execute("COMMIT")
         except BaseException as exc:

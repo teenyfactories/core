@@ -118,4 +118,4 @@ def test_parks_after_max_attempts(monkeypatch):
     for _ in range(6):                       # 5 dispatches + the parking sighting
         base._dispatch(entries, it)
     assert any('parked' in e for e in errors)
-    assert base._strikes[('k1', 'pending', '2026-01-01T00:00:00')] == base._PARKED
+    assert base._strikes[base._strike_key(it)] == base._PARKED
