@@ -2,6 +2,23 @@
 
 Every row carries a `state`, a `user_id`, and audit timestamps. The state drives pub/sub — downstream workers subscribe to state transitions via `tf.on_state(collection, state)`.
 
+## Named factory scope
+
+`tf.collection(name)` targets the running agent's factory. `tf.factory(factory_name).collection(name)` uses the same CRUD, query and vector operations against one named owner in the configured installation:
+
+```python
+people = tf.factory('relationships').collection('person')
+person = people.get(person_key)
+people.set(person_key, state='verified')  # Preserves the payload.
+matches = people.where("is_active == true").limit(20).get_all()
+```
+
+The scope survives query chaining, including state filters, count, iteration and vector search. Results retain `factory_name`, `collection` and `key`; a bare key is not globally unique. Named writes keep Python's whole-payload replacement semantics. Local calls do not change their target inside a cross-factory handler.
+
+Factory names must match `[a-z][a-z0-9_-]{0,29}`. `all` is rejected before execution; all-factory operations are not supported. A named scope does not change the running agent's identity, secrets, logging or model settings. It uses the agent's existing database credentials and a transaction-local source scope. Agents initially have open named-factory data access within this installation; it is not an agent-to-agent isolation boundary. Existing database restrictions still apply. Factory scope does not select another tenant, database or installation.
+
+Named `on_state` subscriptions use the same scope; see tf-common. They claim source work, not passive notifications. There are no new CRUD methods or observer/consumer modes.
+
 **Reserved collection names** (do not write from agent code): `_debug` (stepped-debug toggle, see *Stepped debugging* below), `_mcp_*` (MCP server registrations). The leading underscore is the convention — keep your own collection names underscore-free.
 
 ## Writes

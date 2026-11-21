@@ -20,6 +20,8 @@ import teenyfactories as tf
 | Filter rows on a payload predicate | `tf.collection(name).where("field == 'x'").get_all()` |
 | Vector similarity search | `tf.collection(name).state('X').vector_search(text_or_vec).limit(5).run()` |
 | Run a periodic job | `tf.on_schedule.every(10).minutes.do(fn)` |
+| Read/write a named factory's collection | `tf.factory(factory_name).collection(name)` with the existing collection methods |
+| Process a named factory's state queue | `tf.factory(factory_name).on_state(collection, state).do(handler)` |
 
 One pub/sub primitive: `tf.on_state`; no message bus (detail below). Collection read/write detail (filters, vector search, upsert semantics): see tf-data.
 
@@ -33,6 +35,18 @@ next state; to signal an event, write a domain row at a state a consumer
 subscribes to.
 
 ### Subscribe to a state on a collection (the only primitive)
+
+Use `tf.factory(name).on_state(...)` to claim work from one named source factory. Existing `.delay()`, `.priority()` and `.claim_duration()` modifiers still apply. The handler receives the source `factory_name`; transition or remove the row through that named scope. Unqualified `tf.collection(...)` calls inside the handler still target the running agent's factory.
+
+```python
+@tf.factory('billing').on_state('invoice', 'review_requested').do
+def review_invoice(item):
+    tf.factory(item['factory_name']).collection(item['collection']).set(
+        item['key'], state='reviewed',
+    )
+```
+
+This is the existing claim-and-process contract, not a broadcast or passive feed. Local and remote handlers targeting the same source queue compete for its claims. Keep one logical handler owner per `(factory, collection, state)`. `all` subscriptions are unsupported. Named-source wakes use direct PostgreSQL notifications or the authenticated orchestrator relay; safety polling remains authoritative on wake failures. Claims, retry tracking and exclusions retain source identity.
 
 ```python
 @tf.on_state('documents', 'loaded').do
@@ -82,7 +96,7 @@ Handler {collection}.{state} returned without advancing key=... (state and state
 
 (No such warning for a handler that **raised** — that already logs an `[ERROR]` — or for a **claim-skip**, where the handler never ran.)
 
-Strike accounting is **in-memory and per-row**, keyed `(key, state, state_changed_at)`:
+Strike accounting is **in-memory and per-row**, keyed by factory, collection, key, state and state-entry timestamp:
 
 - A **process restart** wipes the strike map → the row is re-attempted. This is intentional: a restart implies a fix was shipped.
 - A **genuine re-queue** — a state transition, or an explicit same-state re-stamp that bumps `state_changed_at` (the value both the poll and the strike map key on) — is a new strike key → the count resets to fresh work. A data-only write that leaves `state_changed_at` unchanged does NOT reset it: the row keeps its strike key and still parks.

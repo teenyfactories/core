@@ -8,6 +8,8 @@ Source: `ui-reference.md:2168–2187`
 
 Embedded inline chat connected to the LLM agent. When present in the composable UI, the floating chat FAB is hidden.
 
+When an operator configures `OPENAI_API_KEY`, hold Space on **Hold to talk** and release to send the transcript. After the first use, **Read replies aloud** is optional and resets on page reload. The server retains conversation text, not recorded audio.
+
 ```yaml
 component: chat_panel
 ```

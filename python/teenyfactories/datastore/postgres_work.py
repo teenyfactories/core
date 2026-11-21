@@ -1,19 +1,34 @@
 """Work lookup and atomic claims; durable state stays authoritative."""
 import json
 
-from .. import config, db
 from .postgres_rows import row_to_dict
 
 
 class PostgresWork:
     def peek_next(self, subs, bound, exclude=None):
+        """Poll each named source under its own RLS transaction, then compare heads."""
+        from . import get_datastore
+        grouped = {}
+        for source, *subscription in subs:
+            grouped.setdefault(source, []).append(subscription)
+        candidates = []
+        for source, subscriptions in grouped.items():
+            store = get_datastore(source)
+            exclusions = [item[1:] for item in (exclude or []) if item[0] == source]
+            row = store._peek_local(subscriptions, bound, exclusions)
+            if row is not None:
+                candidates.append(row)
+        return min(candidates, key=lambda row: (row['_tier'], row['_priority'],
+                   row['state_changed_at'], row['key'], row['factory_name'])) if candidates else None
+
+    def _peek_local(self, subs, bound, exclude=None):
         if not subs:
             return None
         values = ','.join(['(%s,%s,%s,%s,%s)'] * len(subs))
         params = []
         for coll, state, tier, priority, delay in subs:
             params.extend([coll, state, int(tier), int(priority), float(delay)])
-        params.extend([config.FACTORY_NAME, int(bound)])
+        params.extend([self.factory_name, int(bound)])
         exclusions = ''
         if exclude:
             placeholders = ','.join(['(%s,%s,%s,%s::timestamptz)'] * len(exclude))
@@ -23,7 +38,7 @@ class PostgresWork:
         sql = f"""
             WITH subs(collection,state,tier,priority,delay) AS (VALUES {values})
             SELECT d.factory_name,d.collection,d.key,d.user_id,d.value,d.state,
-                   d.created_at,d.updated_at,d.state_changed_at
+                   d.created_at,d.updated_at,d.state_changed_at,s.tier::int,s.priority::int
               FROM factory_data d
               JOIN subs s ON s.collection=d.collection AND s.state=d.state
              WHERE d.factory_name=%s
@@ -38,17 +53,18 @@ class PostgresWork:
                {exclusions}
              ORDER BY s.tier::int,s.priority::int,d.state_changed_at,d.key LIMIT 1
         """
-        with db.transaction() as cur:
+        with self.transaction() as cur:
             cur.execute(sql, params)
             row = cur.fetchone()
-        return {**row_to_dict(row[:8]), 'state_changed_at': row[8]} if row else None
+        return {**row_to_dict(row[:8]), 'state_changed_at': row[8],
+                '_tier': row[9], '_priority': row[10]} if row else None
 
     def try_claim(self, collection, key, state, state_changed_at, ttl_seconds):
         from ..claims import hash_claim_key, _normalize_timestamp, _worker_id
-        claim_key = hash_claim_key(collection, key, state, state_changed_at)
+        claim_key = hash_claim_key(collection, key, state, state_changed_at, factory_name=self.factory_name)
         data = {'collection': collection, 'key': key, 'source_state': state,
                 'source_state_changed_at': _normalize_timestamp(state_changed_at), 'claimed_by': _worker_id()}
-        with db.transaction() as cur:
+        with self.transaction() as cur:
             cur.execute(
                 """WITH candidate AS (
                      SELECT 1 FROM public.factory_data
@@ -57,25 +73,26 @@ class PostgresWork:
                    INSERT INTO public.factory_job_claims (factory_name,claim_key,claim_data,lease_expires_at)
                    SELECT %s,%s,%s::jsonb,NOW()+(%s*INTERVAL '1 second') FROM candidate
                    ON CONFLICT (factory_name,claim_key) DO NOTHING RETURNING claim_key""",
-                (config.FACTORY_NAME, collection, key, state, state_changed_at,
-                 config.FACTORY_NAME, claim_key, json.dumps(data), float(ttl_seconds)),
+                (self.factory_name, collection, key, state, state_changed_at,
+                 self.factory_name, claim_key, json.dumps(data), float(ttl_seconds)),
             )
             return cur.fetchone() is not None
 
     def release_claim(self, collection, key, state, state_changed_at):
         from ..claims import hash_claim_key, _worker_id
-        with db.transaction() as cur:
+        with self.transaction() as cur:
             cur.execute(
                 """DELETE FROM public.factory_job_claims
                     WHERE factory_name=%s AND claim_key=%s AND claim_data->>'claimed_by'=%s""",
-                (config.FACTORY_NAME, hash_claim_key(collection, key, state, state_changed_at), _worker_id()),
+                (self.factory_name, hash_claim_key(collection, key, state, state_changed_at,
+                                                 factory_name=self.factory_name), _worker_id()),
             )
 
     def reap_claims(self):
-        with db.transaction() as cur:
+        with self.transaction() as cur:
             cur.execute("DELETE FROM public.factory_job_claims WHERE factory_name=%s AND lease_expires_at<NOW() "
-                        "RETURNING claim_data->>'collection'", (config.FACTORY_NAME,))
+                        "RETURNING claim_data->>'collection'", (self.factory_name,))
             rows = cur.fetchall()
             if rows:
-                cur.execute("SELECT pg_notify('tf_data_changed', %s)", (json.dumps({'factory_name': config.FACTORY_NAME}),))
+                cur.execute("SELECT pg_notify('tf_data_changed', %s)", (json.dumps({'factory_name': self.factory_name}),))
         return [row[0] for row in rows]

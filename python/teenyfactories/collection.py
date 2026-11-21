@@ -32,9 +32,16 @@ def _check_channel_length(factory_name, collection, state):
 
 
 class Collection:
-    def __init__(self, name: str):
+    def __init__(self, name: str, factory_name=None):
         _validate_collection(name)
         self._name = name
+        self._factory_name = factory_name
+
+    def _store(self):
+        return get_datastore() if self._factory_name is None else get_datastore(self._factory_name)
+
+    def _query(self):
+        return CollectionQuery(self._name, factory_name=self._factory_name)
 
     def set(self, key: str, state: Optional[str] = None, data: Optional[dict] = None) -> str:
         """Upsert a row. Passed data replaces the payload; state-only preserves it."""
@@ -43,8 +50,8 @@ class Collection:
         if state is not None:
             _validate_state(state)
         try:
-            _check_channel_length(config.FACTORY_NAME, self._name, state or 'new')
-            return get_datastore().upsert(self._name, key, state, data)
+            _check_channel_length(self._factory_name or config.FACTORY_NAME, self._name, state or 'new')
+            return self._store().upsert(self._name, key, state, data)
         except Exception as exc:
             log_error(f'collection.set failed: {exc}')
             raise
@@ -54,8 +61,8 @@ class Collection:
         _validate_state(state)
         key = uuid.uuid4().hex
         try:
-            _check_channel_length(config.FACTORY_NAME, self._name, state)
-            return get_datastore().insert(self._name, key, state, data)
+            _check_channel_length(self._factory_name or config.FACTORY_NAME, self._name, state)
+            return self._store().insert(self._name, key, state, data)
         except Exception as exc:
             log_error(f'collection.add failed: {exc}')
             raise
@@ -63,7 +70,7 @@ class Collection:
     def remove(self, key: str):
         """Delete one row and its associated vectors."""
         try:
-            return get_datastore().remove(self._name, key)
+            return self._store().remove(self._name, key)
         except Exception as exc:
             log_error(f'collection.remove failed: {exc}')
             raise
@@ -91,7 +98,7 @@ class Collection:
                 if item['embedding'] is None:
                     item['embedding'] = list(next(computed))
         try:
-            return get_datastore().replace_vectors(self._name, key, norm)
+            return self._store().replace_vectors(self._name, key, norm)
         except Exception as exc:
             log_error(f'collection.set_vectors failed: {exc}')
             raise
@@ -99,39 +106,39 @@ class Collection:
     def get(self, key: str) -> Optional[Dict[str, Any]]:
         """Return a row or None; preserve the current fail-soft read contract."""
         try:
-            return get_datastore().get(self._name, key)
+            return self._store().get(self._name, key)
         except Exception as exc:
             log_error(f'collection.get failed: {exc}')
             return None
 
     def exists(self, key: str) -> bool:
         try:
-            return get_datastore().exists(self._name, key)
+            return self._store().exists(self._name, key)
         except Exception as exc:
             log_error(f'collection.exists failed: {exc}')
             return False
 
     def state(self, value):
-        return CollectionQuery(self._name).state(value)
+        return self._query().state(value)
 
     def where(self, expr: str):
-        return CollectionQuery(self._name).where(expr)
+        return self._query().where(expr)
 
     def limit(self, n: int):
-        return CollectionQuery(self._name).limit(n)
+        return self._query().limit(n)
 
     def get_all(self):
-        return CollectionQuery(self._name).get_all()
+        return self._query().get_all()
 
     def count(self) -> int:
-        return CollectionQuery(self._name).count()
+        return self._query().count()
 
     def first(self):
-        return CollectionQuery(self._name).first()
+        return self._query().first()
 
     def vector_search(self, text_or_vec):
         """Start lazy ANN search; limit/run, chunks and key remain chainable."""
-        return CollectionQuery(self._name).vector_search(text_or_vec)
+        return self._query().vector_search(text_or_vec)
 
 
 def collection(name: str) -> Collection:

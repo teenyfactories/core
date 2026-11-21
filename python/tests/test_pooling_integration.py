@@ -7,6 +7,7 @@ import pytest
 from teenyfactories import config, db
 from teenyfactories.collection import collection
 from teenyfactories.datastore import get_datastore
+import teenyfactories as tf
 
 pytestmark = pytest.mark.skipif(
     os.getenv('POSTGRES_HOST') != '127.0.0.1' or os.getenv('POSTGRES_DB') != 'pooling_factory',
@@ -76,3 +77,62 @@ def test_reconnect_reapplies_factory_scope(monkeypatch):
     with db.transaction() as cur:
         cur.execute("SELECT current_setting('app.factory_name')")
         assert cur.fetchone()[0] == 'canary_a'
+
+
+def test_named_cross_factory_crud_vectors_and_claimed_handoff(monkeypatch):
+    """Real restricted-role RLS, SQL queries and dispatch; no owner-role shortcut."""
+    from teenyfactories.message_queue import base
+    import teenyfactories.notifications as notifications
+    from unittest.mock import Mock
+
+    key = uuid.uuid4().hex
+    monkeypatch.setattr(config, 'FACTORY_NAME', 'canary')
+    monkeypatch.setattr(base, 'FACTORY_NAME', 'canary')
+    monkeypatch.setattr(base, '_handlers', {})
+    monkeypatch.setattr(base, '_pending_registrations', [])
+    monkeypatch.setattr(base, '_strikes', {})
+    monkeypatch.setattr(base, '_ran_keys', set())
+    monkeypatch.setattr(base, '_park_reason', {})
+    monkeypatch.setattr(base, '_provider_instance', None)
+    monkeypatch.setattr(notifications, 'get_notifications', lambda: Mock())
+    local = tf.collection('scope_probe')
+    owner = tf.factory('canary_a').collection('scope_probe')
+    other = tf.factory('canary_b').collection('scope_probe')
+    created = None
+    try:
+        local.set(key, state='ready', data={'owner': 'local'})
+        owner.set(key, state='ready', data={'owner': 'source', 'n': 10})
+        other.set(key, state='ready', data={'owner': 'other'})
+        assert local.get(key)['data']['owner'] == 'local'
+        assert other.get(key)['data']['owner'] == 'other'
+        assert owner.exists(key)
+        created = owner.add('new', {'owner': 'new'})
+        assert owner.get(created)['factory_name'] == 'canary_a'
+        assert owner.where("owner == 'source'").state('ready').count() == 1
+        assert owner.where("owner == 'source'").first()['key'] == key
+        assert owner.set_vectors(key, [{'content': 'scoped', 'embedding': [1.0] * 256}]) == 1
+        hits = owner.vector_search([1.0] * 256).key(key).run()
+        assert hits[0]['factory_name'] == 'canary_a'
+        assert not other.vector_search([1.0] * 256).key(key).run()
+        owner.set(key, data={'owner': 'source'})
+        assert 'n' not in owner.get(key)['data']  # Python replacement semantics survive.
+        seen = []
+        def handle(item):
+            seen.append(item['factory_name'])
+            assert local.get(key)['data']['owner'] == 'local'
+            tf.factory(item['factory_name']).collection(item['collection']).set(item['key'], state='done')
+        tf.factory('canary_a').on_state('scope_probe', 'ready').do(handle)
+        base._flush_registrations()
+        base._poll_pass()
+        assert seen == ['canary_a']
+        assert owner.get(key)['state'] == 'done'
+        assert local.get(key)['state'] == other.get(key)['state'] == 'ready'
+        with db.transaction('canary_a') as cur:
+            cur.execute("SELECT count(*) FROM factory_job_claims WHERE claim_data->>'key'=%s", (key,))
+            assert cur.fetchone()[0] == 0
+        assert owner.set_vectors(key, []) == 0
+    finally:
+        for rows in [local, owner, other]:
+            rows.remove(key)
+        if created:
+            owner.remove(created)

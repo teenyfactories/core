@@ -27,7 +27,7 @@ Writing a row into a `(collection, state)` makes every subscriber to that pair p
 | Group | Names |
 |---|---|
 | Pub/sub | `on_state`, `run_pending` (the only pub/sub primitive — no message bus) |
-| Data | `collection` (`.set`, `.add`, `.get`, `.get_all`, `.remove`, `.count`, `.exists`, `.first`, `.state`, `.where`, `.limit`, `.vector_search`, `.set_vectors`), `embed`, `chunk` |
+| Data | `collection` (`.set`, `.add`, `.get`, `.get_all`, `.remove`, `.count`, `.exists`, `.first`, `.state`, `.where`, `.limit`, `.vector_search`, `.set_vectors`), `factory`, `embed`, `chunk` |
 | LLM | `llm` (fluent builder — `.ask` / `.run_agent_loop`), `call_llm` (LEGACY) |
 | MCP | `add_mcp_server`, `add_mcp_tool`, `add_mcp_readme` (tool `name` must match `^[a-z0-9_]{1,35}$` — it becomes a `_mcp_<name>` collection + NOTIFY channel; a bad name is logged as an ERROR and skipped) |
 | Schedule | `on_schedule.every(N).<unit>.do(handler)` |
@@ -38,6 +38,12 @@ Writing a row into a `(collection, state)` makes every subscriber to that pair p
 | Lifecycle / config | `sleep`, `shutting_down`, `FACTORY_NAME`, `AGENT_NAME`, `AGENT_SLUG`, `AGENT_ID`, `__version__` |
 
 Anything not in this list is not part of the supported surface — don't reach into submodules.
+
+## Named factory access
+
+`tf.factory('relationships').collection('person')` scopes the existing collection operations to one owner. `tf.factory('billing').on_state('invoice', 'issued').do(handler)` claims work from billing. Handlers receive the source factory identity; unqualified calls remain local, so advance source records through `tf.factory(item['factory_name'])`. Scope selection does not change the agent's identity, secrets or settings.
+
+Named-factory agent data access is initially open within the configured installation, subject to existing database restrictions. This is not an isolation boundary between agents. `all` is unsupported and rejected. Schema governance, passive subscriptions and cross-installation access are not supplied by this API.
 
 ## How it plugs in
 

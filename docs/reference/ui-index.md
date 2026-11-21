@@ -22,6 +22,7 @@ The composable UI system builds factory dashboards and editor pages from a decla
 - **ui-card** — framed content panel with an optional header and footer.
 - **ui-modal** — overlay dialog for focused, short-lived views and edits.
 - **ui-tabs** — tabbed multi-panel view.
+- **ui-pages** — named top-level factory pages shown in sidebar navigation.
 - **ui-code_editor** — syntax-highlighted code and configuration editor.
 - **ui-tree_editor** — editable hierarchical tree view.
 - **ui-file_explorer** — file browser for a factory's attached storage volume.

@@ -7,6 +7,7 @@ from .. import config, db
 class PostgresNotifications:
     def __init__(self):
         self._generation = -1
+        self._factories = set()
 
     def _listen(self, conn):
         if db.generation() != self._generation:
@@ -15,6 +16,7 @@ class PostgresNotifications:
             self._generation = db.generation()
 
     def update_subscriptions(self, subscriptions):
+        self._factories = {sub[0] if len(sub) == 3 else config.FACTORY_NAME for sub in subscriptions}
         with db.session() as conn:
             self._listen(conn)
 
@@ -28,7 +30,7 @@ class PostgresNotifications:
             for note in pending:
                 try:
                     payload = json.loads(note.payload)
-                    if isinstance(payload, dict) and payload.get('factory_name') == config.FACTORY_NAME:
+                    if isinstance(payload, dict) and payload.get('factory_name') in self._factories | {config.FACTORY_NAME}:
                         return True
                 except (TypeError, ValueError):
                     pass

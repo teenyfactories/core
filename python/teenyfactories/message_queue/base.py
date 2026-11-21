@@ -75,13 +75,13 @@ from teenyfactories.logging import log_debug, log_info, log_warn, log_error
 
 _provider_instance = None
 
-# Active handler registry, keyed by (collection, state). Each value is a list
+# Active handler registry, keyed by (factory, collection, state). Each value is a list
 # of entry dicts: { handler, delay_seconds }. One handler per (collection,
 # state) is the supported contract (enforced with a log_warn at registration)
 # — strike accounting is per-row, not per-entry.
 _handlers: Dict[tuple, List[dict]] = {}
 
-# Strike tracker: (key, state, state_changed_at_iso) -> attempt count, or
+# Strike tracker: owner-qualified row + state-entry identity -> attempt count, or
 # _PARKED. Keyed on state_changed_at (NOT updated_at) so "the row moved" means
 # the same thing here as it does for the poll, which orders and re-arms on
 # state_changed_at: a transition to a new state OR a same-state re-queue that
@@ -218,11 +218,12 @@ class SubscriptionBuilder:
     legitimately run longer.
     """
 
-    def __init__(self, collection: str, state: str):
+    def __init__(self, collection: str, state: str, factory_name=None):
         from ..claims import DEFAULT_CLAIM_DURATION_SECONDS
 
         self._collection = collection
         self._state = state
+        self._factory_name = factory_name
         self._delay_seconds: float = 0.0
         self._claim_duration_seconds: float = DEFAULT_CLAIM_DURATION_SECONDS
         self._priority: int = 0
@@ -263,6 +264,7 @@ class SubscriptionBuilder:
             delay_seconds=self._delay_seconds,
             claim_duration_seconds=self._claim_duration_seconds,
             priority=self._priority,
+            factory_name=self._factory_name,
         )
         return handler
 
@@ -299,6 +301,7 @@ def _enqueue_registration(
     delay_seconds: float = 0.0,
     claim_duration_seconds: float = 3600.0,
     priority: int = 0,
+    factory_name=None,
 ):
     """Queue a subscription. The LISTEN + handler-table insertion happens
     later, from inside the run_pending lifecycle (`_flush_registrations`)."""
@@ -310,6 +313,7 @@ def _enqueue_registration(
             "delay_seconds": delay_seconds,
             "claim_duration_seconds": claim_duration_seconds,
             "priority": int(priority),
+            "factory_name": FACTORY_NAME if factory_name is None else factory_name,
         }
     )
 
@@ -329,13 +333,14 @@ def _flush_registrations():
         reg = _pending_registrations.pop(0)
         coll = reg["collection"]
         state = reg["state"]
-        key = (coll, state)
+        source = reg["factory_name"]
+        key = (source, coll, state)
         delay_seconds = reg.get("delay_seconds") or 0.0
 
         if _handlers.get(key):
             log_warn(
-                f"Second handler registered on ({coll!r}, {state!r}). Only ONE "
-                f"handler per (collection, state) is supported: strike/retry "
+                f"Second handler registered on ({source!r}, {coll!r}, {state!r}). Only ONE "
+                f"handler per (factory, collection, state) is supported: strike/retry "
                 f"accounting is per-row, not per-handler, so multiple handlers "
                 f"on one state silently duplicate-execute the succeeding one. "
                 f"Refactor to a single handler."
@@ -349,7 +354,7 @@ def _flush_registrations():
                 "priority": reg.get("priority") or 0,
             }
         )
-        log_debug(f"Registered handler for {coll}.{state} (delay_seconds={delay_seconds})")
+        log_debug(f"Registered handler for {source}.{coll}.{state} (delay_seconds={delay_seconds})")
 
     from ..notifications import get_notifications
     try:
@@ -493,7 +498,7 @@ def run_pending():
     try:
         from ..claims import janitor_sweep_if_due
 
-        janitor_sweep_if_due()
+        janitor_sweep_if_due({FACTORY_NAME, *(source for source, _, _ in _handlers)})
     except Exception as e:
         log_error(f"Claim janitor raised: {e}\n{_tb.format_exc()}")
 
@@ -519,11 +524,12 @@ def _iso(ts) -> str:
 
 
 def _strike_key(item: dict) -> tuple:
-    """The strike/seen key for a row: (key, state, state_changed_at_iso). Used
+    """The owner-qualified strike/seen key for a row. Used
     by both _dispatch (strike accounting) and _poll_pass (per-pass seen set), so
     the two agree on row identity — keyed on state_changed_at so a same-state
     re-queue (bumped state_changed_at) reads as fresh work, a pure no-op does not."""
-    return (item.get("key") or "", item.get("state"), _iso(item.get("state_changed_at")))
+    return (item.get("key") or "", item.get("state"), _iso(item.get("state_changed_at")),
+            item.get("factory_name", FACTORY_NAME), item.get("collection"))
 
 
 def _age_seconds(state_changed_at) -> float:
@@ -616,7 +622,8 @@ def _dispatch(entries: List[dict], item: dict):
 
     for entry in entries:
         ttl = entry.get("claim_duration_seconds") or 3600.0
-        if not try_claim(coll, row_key, state, sca, ttl):
+        source = item.get("factory_name", FACTORY_NAME)
+        if not try_claim(coll, row_key, state, sca, ttl, factory_name=source):
             # Another worker (replica/orphan/zombie) holds the claim. Silently
             # skip — don't strike-count, because we didn't actually attempt the
             # handler. The other worker will or won't transition the row; if
@@ -632,7 +639,7 @@ def _dispatch(entries: List[dict], item: dict):
             _park_reason[rk] = repr(e)
             log_error(f"Handler {coll}.{state} failed on key={rk[0]!r} " f"attempt {attempt}/{_MAX_ATTEMPTS}: {e}")
         finally:
-            release_claim(coll, row_key, state, sca)
+            release_claim(coll, row_key, state, sca, factory_name=source)
 
 
 # =============================================================================
@@ -641,17 +648,17 @@ def _dispatch(entries: List[dict], item: dict):
 
 
 def _subscription_rows() -> List[tuple]:
-    """The finder's input: one ``(collection, state, tier, priority, delay)`` per
-    subscribed (collection, state). ``tier`` 0 = MCP request collections
+    """The finder's input: one ``(factory, collection, state, tier, priority, delay)`` per
+    subscribed source queue. ``tier`` 0 = MCP request collections
     (``_mcp_*``, always-first FIFO), 1 = everything else. ``priority`` / ``delay``
     are the MIN across that key's entries (one handler per key is the contract,
     so the min is just that handler's value)."""
     rows: List[tuple] = []
-    for (coll, state), entries in _handlers.items():
+    for (source, coll, state), entries in _handlers.items():
         tier = 0 if coll.startswith(_MCP_COLLECTION_PREFIX) else 1
         pri = min((e.get("priority") or 0) for e in entries)
         dly = min((e.get("delay_seconds") or 0.0) for e in entries)
-        rows.append((coll, state, tier, pri, dly))
+        rows.append((source, coll, state, tier, pri, dly))
     return rows
 
 
@@ -707,7 +714,7 @@ def _poll_pass(do_db_poll: bool = True):
     # (peek eventually returns None). One-attempt-per-pass strike semantics are
     # preserved: a no-op row is dispatched exactly once per pass.
     seen: set = set()
-    exclude: list = []  # (collection, key, state, state_changed_at) to skip in peek
+    exclude: list = []  # (factory, collection, key, state, state_changed_at)
     units = 0
     while units < _MAX_UNITS_PER_PASS:
         sch = _get_next_scheduled_job()
@@ -723,9 +730,11 @@ def _poll_pass(do_db_poll: bool = True):
                 # Already attempted this pass and still here → exclude it (using
                 # the row's OWN state_changed_at datetime, which round-trips PG
                 # equality exactly) and re-peek. Do NOT re-dispatch it.
-                exclude.append((row["collection"], row["key"], row["state"], row["state_changed_at"]))
+                exclude.append((row.get("factory_name", FACTORY_NAME), row["collection"], row["key"],
+                                row["state"], row["state_changed_at"]))
                 continue
-            due = _due_entries(_handlers.get((row["collection"], row["state"]), []), row)
+            due = _due_entries(_handlers.get((row.get("factory_name", FACTORY_NAME),
+                                             row["collection"], row["state"]), []), row)
             if due:
                 seen.add(rk)
                 _dispatch(due, row)
@@ -733,7 +742,8 @@ def _poll_pass(do_db_poll: bool = True):
                 continue
             # No entry's delay has elapsed (shouldn't happen — the finder bounds
             # on min-delay). Exclude to avoid a spin, then re-peek.
-            exclude.append((row["collection"], row["key"], row["state"], row["state_changed_at"]))
+            exclude.append((row.get("factory_name", FACTORY_NAME), row["collection"], row["key"],
+                            row["state"], row["state_changed_at"]))
             continue
 
         # No state row won this round → run the best scheduled job, else done.

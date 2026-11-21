@@ -37,12 +37,13 @@ class _FakeProvider:
         self.rows = list(rows)
 
     def peek_next(self, subs, bound, exclude=None):
-        ex = set((c, k, s, sca) for (c, k, s, sca) in (exclude or []))
+        ex = set(exclude or [])
         elig = [
             r
             for r in self.rows
             if (r["_tier"] == 0 or r["_priority"] < bound)
-            and (r["collection"], r["key"], r["state"], r["state_changed_at"]) not in ex
+            and (r.get("factory_name", base.FACTORY_NAME), r["collection"], r["key"],
+                 r["state"], r["state_changed_at"]) not in ex
         ]
         if not elig:
             return None
@@ -73,7 +74,7 @@ def _patch_common(monkeypatch):
 
 
 def _register(coll, state, handler, priority=0, delay=0.0):
-    base._handlers.setdefault((coll, state), []).append(
+    base._handlers.setdefault((base.FACTORY_NAME, coll, state), []).append(
         {"handler": handler, "delay_seconds": delay, "claim_duration_seconds": 3600.0, "priority": priority}
     )
 
@@ -244,7 +245,7 @@ def test_subscription_rows_tiers_and_mins():
     _reset_all()
     _register("_mcp_query", "request", lambda it: None, priority=0, delay=0.0)
     _register("orders", "new", lambda it: None, priority=3, delay=5.0)
-    rows = dict(((c, s), (t, p, d)) for (c, s, t, p, d) in base._subscription_rows())
+    rows = dict(((c, s), (t, p, d)) for (_, c, s, t, p, d) in base._subscription_rows())
     assert rows[("_mcp_query", "request")] == (0, 0, 0.0)  # MCP → tier 0
     assert rows[("orders", "new")] == (1, 3, 5.0)  # ordinary → tier 1
 

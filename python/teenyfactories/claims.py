@@ -31,15 +31,17 @@ def _normalize_timestamp(ts):
     return str(ts)
 
 
-def hash_claim_key(collection, key, state, state_changed_at):
+def hash_claim_key(collection, key, state, state_changed_at, factory_name=None):
     """Keep the existing claim-key wire format across old/new workers."""
-    parts = [config.FACTORY_NAME or '', collection, key, state, _normalize_timestamp(state_changed_at)]
+    source = config.FACTORY_NAME if factory_name is None else factory_name
+    parts = [source or '', collection, key, state, _normalize_timestamp(state_changed_at)]
     return hashlib.sha256('|'.join(parts).encode('utf-8')).hexdigest()
 
 
-def try_claim(collection, key, state, state_changed_at, ttl_seconds):
+def try_claim(collection, key, state, state_changed_at, ttl_seconds, factory_name=None):
     try:
-        won = get_datastore().try_claim(collection, key, state, state_changed_at, ttl_seconds)
+        store = get_datastore() if factory_name is None else get_datastore(factory_name)
+        won = store.try_claim(collection, key, state, state_changed_at, ttl_seconds)
         log_debug(f"claim {'ACQUIRED' if won else 'SKIPPED'} {collection}/{key} state={state}")
         return won
     except Exception as exc:
@@ -48,23 +50,27 @@ def try_claim(collection, key, state, state_changed_at, ttl_seconds):
         return False
 
 
-def release_claim(collection, key, state, state_changed_at):
+def release_claim(collection, key, state, state_changed_at, factory_name=None):
     try:
-        get_datastore().release_claim(collection, key, state, state_changed_at)
+        store = get_datastore() if factory_name is None else get_datastore(factory_name)
+        store.release_claim(collection, key, state, state_changed_at)
         log_debug(f'claim RELEASED {collection}/{key} state={state}')
     except Exception as exc:
         log_warn(f'claim DELETE failed for {collection}/{key} state={state}: {exc} '
                  '— janitor will reap on lease expiry')
 
 
-def janitor_sweep_if_due():
+def janitor_sweep_if_due(factory_names=None):
     global _last_janitor_tick
     now = time.monotonic()
     if now - _last_janitor_tick < _JANITOR_INTERVAL_SECONDS:
         return
     _last_janitor_tick = now
     try:
-        reaped = get_datastore().reap_claims()
+        reaped = []
+        for source in sorted(set(factory_names or [config.FACTORY_NAME])):
+            store = get_datastore() if source == config.FACTORY_NAME else get_datastore(source)
+            reaped.extend(store.reap_claims())
         if reaped:
             log_warn(f'janitor reaped {len(reaped)} stale claim(s) — possible worker crash '
                      f'or process death. Wake collections: {sorted({c for c in reaped if c})}')
