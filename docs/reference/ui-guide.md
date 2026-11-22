@@ -46,7 +46,7 @@ Sortable/paginated rows → `ui-table` · grid of editable cells addressed by (r
 
 **ui-tabs** — each `tab` node carries its own content under `children:` (the legacy `slot: tab`/`slot: panel` pairing still renders, warned as deprecated), URL-persisted at page level, transient in modals. Switching between full views in place. Not a toolbar/dropdown substitute or page-routing stand-in; use `ui-pages` for sidebar navigation.
 
-**ui-pages** — slot-paired `page`/`panel` markers (counts must match), each page carrying one normal component tree; selected from the factory sidebar via `?page=<id>`. Use only as the complete top-level `default_ui.layout`. For horizontal navigation between factory views, not in-place switching.
+**ui-pages** — a good starting point for factories with distinct operator areas. Use `pages` as the complete `default_ui.layout` root. Each child is a `page` with a unique `id`, optional `title` and its own `children`. The factory sidebar selects it via `?page=<id>`. Do not use slot-paired `page`/`panel` nodes. Use `ui-tabs` for in-place view switching.
 
 **ui-code_editor** — Monaco editor, syntax highlighting, optional git-diff gutter. Scripts/config/structured text. Not single-line strings; single-pane only, no split diff.
 
